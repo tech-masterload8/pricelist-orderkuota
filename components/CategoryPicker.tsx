@@ -188,7 +188,7 @@ export default function CategoryPicker() {
               const open = expanded.has(category.code);
               const inputId = `category-${category.code}`;
               return (
-                <li key={category.code}>
+                <li key={category.code} className={open ? "choice-item is-open" : "choice-item"}>
                   <div className="choice">
                     <CategoryCheckbox
                       id={inputId}
@@ -196,14 +196,25 @@ export default function CategoryPicker() {
                       indeterminate={selectedCount > 0 && selectedCount < providerCodes.length}
                       onChange={() => toggleCategory(providerCodes, selectedCount !== providerCodes.length)}
                     />
-                    <button className="choice-expand" type="button" aria-expanded={open} onClick={() => toggleExpanded(category.code)}>
+                    <button
+                      className="choice-expand"
+                      type="button"
+                      aria-expanded={open}
+                      aria-label={open ? `Tutup operator ${category.name}` : `Buka operator ${category.name}`}
+                      onClick={() => toggleExpanded(category.code)}
+                    >
                       <span>
                         <strong>{category.name}</strong>
                         <small>
                           {selectedCount.toLocaleString("id-ID")} dari {providerCodes.length.toLocaleString("id-ID")} operator
                         </small>
                       </span>
-                      <small>{open ? "Tutup" : "Operator"}</small>
+                      <span className="choice-cue">
+                        {open ? "Tutup" : "Buka"}
+                        <svg className="chevron" viewBox="0 0 20 20" aria-hidden="true">
+                          <path d="M7 4.5 13 10l-6 5.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </span>
                     </button>
                   </div>
                   {open ? (
