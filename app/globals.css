@@ -308,9 +308,32 @@ tbody tr:hover { background: #f7fbf9; }
   margin: 0;
 }
 
+.choice-expand {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.choice-expand span,
 .choice span {
   display: grid;
   gap: 2px;
+}
+
+.operator-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 4px 30px;
+  padding: 0;
+  list-style: none;
 }
 
 .choice small {

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
 import path from "path";
-import type { Catalog, CatalogIndex, ProviderCatalog } from "./types";
+import type { Catalog, CategoryCatalog, CatalogIndex, ProviderCatalog } from "./types";
 
 const CATALOG_PATH = path.join(process.cwd(), "data", "catalog.json");
 const LOCK_PATH = path.join(process.cwd(), "data", "update-lock.json");
@@ -89,7 +89,7 @@ export async function readCatalog(): Promise<Catalog> {
   return memoryCatalog;
 }
 
-export function mergeCatalog(existing: Catalog | null, incoming: Catalog): Catalog {
+export function mergeCatalog(existing: Catalog | null, incoming: Catalog, options?: { mergeProviders?: boolean }): Catalog {
   if (!existing) return recount(incoming);
 
   const incomingByCode = new Map(incoming.categories.map((category) => [category.code, category]));
@@ -98,7 +98,7 @@ export function mergeCatalog(existing: Catalog | null, incoming: Catalog): Catal
     const replacement = incomingByCode.get(category.code);
     if (!replacement) return category;
     replaced.add(category.code);
-    return replacement;
+    return options?.mergeProviders ? mergeProviders(category, replacement) : replacement;
   });
 
   for (const category of incoming.categories) {
@@ -106,6 +106,23 @@ export function mergeCatalog(existing: Catalog | null, incoming: Catalog): Catal
   }
 
   return recount({ ...incoming, categories });
+}
+
+function mergeProviders(existing: CategoryCatalog, incoming: CategoryCatalog): CategoryCatalog {
+  const incomingByCode = new Map(incoming.providers.map((provider) => [provider.code, provider]));
+  const replaced = new Set<string>();
+  const providers = existing.providers.map((provider) => {
+    const replacement = incomingByCode.get(provider.code);
+    if (!replacement) return provider;
+    replaced.add(provider.code);
+    return replacement;
+  });
+
+  for (const provider of incoming.providers) {
+    if (!replaced.has(provider.code)) providers.push(provider);
+  }
+
+  return { ...incoming, providers };
 }
 
 function recount(catalog: Catalog): Catalog {

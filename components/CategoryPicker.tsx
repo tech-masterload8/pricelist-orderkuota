@@ -2,9 +2,29 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CatalogIndex } from "@/lib/types";
 import { readUpdateSelection, writeUpdateSelection } from "@/lib/update-selection";
+
+function CategoryCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+  id,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  onChange: () => void;
+  id: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+
+  return <input ref={ref} id={id} type="checkbox" checked={checked} onChange={onChange} />;
+}
 
 export default function CategoryPicker() {
   const router = useRouter();
@@ -12,6 +32,7 @@ export default function CategoryPicker() {
   const [status, setStatus] = useState<"loading" | "empty" | "ready" | "error">("loading");
   const [pageError, setPageError] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,10 +50,22 @@ export default function CategoryPicker() {
         if (cancelled) return;
 
         const saved = readUpdateSelection();
-        const available = new Set(data.categories.map((category) => category.code));
-        const initial = saved ? saved.filter((code) => available.has(code)) : data.categories.map((category) => category.code);
+        const allProviders = data.categories.flatMap((category) => category.providers.map((provider) => provider.code));
+        let initial = allProviders;
+        if (saved && "providers" in saved) {
+          const available = new Set(allProviders);
+          const kept = saved.providers.filter((code) => available.has(code));
+          initial = kept.length > 0 ? kept : allProviders;
+        } else if (saved && "categories" in saved) {
+          const categoryCodes = new Set(saved.categories);
+          initial = data.categories
+            .filter((category) => categoryCodes.has(category.code))
+            .flatMap((category) => category.providers.map((provider) => provider.code));
+          if (initial.length === 0) initial = allProviders;
+        }
+
         setIndex(data);
-        setChecked(new Set(initial.length > 0 ? initial : data.categories.map((category) => category.code)));
+        setChecked(new Set(initial));
         setStatus("ready");
       } catch (error) {
         if (!cancelled) {
@@ -48,7 +81,7 @@ export default function CategoryPicker() {
     };
   }, []);
 
-  function toggle(code: string) {
+  function toggleProvider(code: string) {
     setChecked((current) => {
       const next = new Set(current);
       if (next.has(code)) next.delete(code);
@@ -58,25 +91,54 @@ export default function CategoryPicker() {
     setSaveError(null);
   }
 
+  function toggleCategory(codes: string[], selected: boolean) {
+    setChecked((current) => {
+      const next = new Set(current);
+      for (const code of codes) {
+        if (selected) next.add(code);
+        else next.delete(code);
+      }
+      return next;
+    });
+    setSaveError(null);
+  }
+
   function setAll(selected: boolean) {
     if (!index) return;
-    setChecked(selected ? new Set(index.categories.map((category) => category.code)) : new Set());
+    const codes = index.categories.flatMap((category) => category.providers.map((provider) => provider.code));
+    setChecked(selected ? new Set(codes) : new Set());
     setSaveError(null);
+  }
+
+  function toggleExpanded(code: string) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
   }
 
   function save() {
     if (!index) return;
-    const codes = index.categories.map((category) => category.code).filter((code) => checked.has(code));
-    if (codes.length === 0) {
-      setSaveError("Pilih minimal satu kategori.");
+    const allProviders = index.categories.flatMap((category) => category.providers.map((provider) => provider.code));
+    const selected = allProviders.filter((code) => checked.has(code));
+    if (selected.length === 0) {
+      setSaveError("Pilih minimal satu operator.");
       return;
     }
 
-    writeUpdateSelection(codes.length === index.categories.length ? null : codes);
+    writeUpdateSelection(selected.length === allProviders.length ? null : selected);
     router.push("/");
   }
 
-  const selectedCount = index?.categories.filter((category) => checked.has(category.code)).length ?? 0;
+  const totalProviders = index?.categories.reduce((sum, category) => sum + category.providers.length, 0) ?? 0;
+  const selectedProviders = index
+    ? index.categories.reduce(
+        (sum, category) => sum + category.providers.filter((provider) => checked.has(provider.code)).length,
+        0,
+      )
+    : 0;
 
   return (
     <main className="page">
@@ -86,8 +148,8 @@ export default function CategoryPicker() {
           <h1>Pilih Kategori Produk</h1>
           <p className="meta">
             {index
-              ? `${selectedCount.toLocaleString("id-ID")} dari ${index.categories.length.toLocaleString("id-ID")} kategori akan diambil saat Update Harga diklik.`
-              : "Pilih kategori yang ingin diperbarui."}
+              ? `${selectedProviders.toLocaleString("id-ID")} dari ${totalProviders.toLocaleString("id-ID")} operator akan diambil saat Update Harga diklik.`
+              : "Pilih kategori dan operator yang ingin diperbarui."}
           </p>
         </div>
         <div className="top-actions">
@@ -121,24 +183,53 @@ export default function CategoryPicker() {
           </div>
           <ul className="choice-list">
             {index.categories.map((category) => {
+              const providerCodes = category.providers.map((provider) => provider.code);
+              const selectedCount = providerCodes.filter((code) => checked.has(code)).length;
+              const open = expanded.has(category.code);
               const inputId = `category-${category.code}`;
-              const providerCount = category.providers.length;
               return (
                 <li key={category.code}>
-                  <label className="choice" htmlFor={inputId}>
-                    <input
+                  <div className="choice">
+                    <CategoryCheckbox
                       id={inputId}
-                      type="checkbox"
-                      checked={checked.has(category.code)}
-                      onChange={() => toggle(category.code)}
+                      checked={selectedCount === providerCodes.length && providerCodes.length > 0}
+                      indeterminate={selectedCount > 0 && selectedCount < providerCodes.length}
+                      onChange={() => toggleCategory(providerCodes, selectedCount !== providerCodes.length)}
                     />
-                    <span>
-                      <strong>{category.name}</strong>
-                      <small>
-                        {providerCount.toLocaleString("id-ID")} provider
-                      </small>
-                    </span>
-                  </label>
+                    <button className="choice-expand" type="button" aria-expanded={open} onClick={() => toggleExpanded(category.code)}>
+                      <span>
+                        <strong>{category.name}</strong>
+                        <small>
+                          {selectedCount.toLocaleString("id-ID")} dari {providerCodes.length.toLocaleString("id-ID")} operator
+                        </small>
+                      </span>
+                      <small>{open ? "Tutup" : "Operator"}</small>
+                    </button>
+                  </div>
+                  {open ? (
+                    <ul className="operator-list">
+                      {category.providers.length === 0 ? <li className="empty">Operator belum tersedia.</li> : null}
+                      {category.providers.map((provider) => {
+                        const providerId = `provider-${provider.code}`;
+                        return (
+                          <li key={provider.code}>
+                            <label className="choice" htmlFor={providerId}>
+                              <input
+                                id={providerId}
+                                type="checkbox"
+                                checked={checked.has(provider.code)}
+                                onChange={() => toggleProvider(provider.code)}
+                              />
+                              <span>
+                                <strong>{provider.name}</strong>
+                                <small>{provider.productCount.toLocaleString("id-ID")} produk</small>
+                              </span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
                 </li>
               );
             })}

@@ -7,12 +7,22 @@ export const revalidate = 0;
 export const maxDuration = 300;
 
 const CATEGORY_CODE = /^[a-z0-9_]+$/i;
+const PROVIDER_CODE = /^prv_[a-z0-9]+$/i;
 
 export async function POST(request: Request) {
   let categoryCodes: string[] | undefined;
+  let providerCodes: string[] | undefined;
   try {
     const body: unknown = await request.json();
-    if (body && typeof body === "object" && "categories" in body && Array.isArray(body.categories)) {
+    if (body && typeof body === "object" && "providers" in body && Array.isArray(body.providers)) {
+      providerCodes = body.providers.filter((code): code is string => typeof code === "string" && PROVIDER_CODE.test(code));
+      if (providerCodes.length === 0) {
+        return Response.json(
+          { error: "Pilih minimal satu operator sebelum memperbarui harga." },
+          { status: 400 },
+        );
+      }
+    } else if (body && typeof body === "object" && "categories" in body && Array.isArray(body.categories)) {
       categoryCodes = body.categories.filter((code): code is string => typeof code === "string" && CATEGORY_CODE.test(code));
       if (categoryCodes.length === 0) {
         return Response.json(
@@ -23,6 +33,7 @@ export async function POST(request: Request) {
     }
   } catch {
     categoryCodes = undefined;
+    providerCodes = undefined;
   }
 
   const encoder = new TextEncoder();
@@ -49,8 +60,9 @@ export async function POST(request: Request) {
       }
 
       try {
+        const partial = Boolean(categoryCodes || providerCodes);
         let existing: Catalog | null = null;
-        if (categoryCodes) {
+        if (partial) {
           try {
             existing = await readCatalog();
           } catch {
@@ -58,13 +70,25 @@ export async function POST(request: Request) {
           }
         }
 
+        if (providerCodes) {
+          const known = new Set(existing?.categories.flatMap((category) => category.providers.map((provider) => provider.code)) ?? []);
+          providerCodes = providerCodes.filter((code) => known.has(code));
+          if (providerCodes.length === 0) {
+            throw new Error("Operator yang dipilih tidak ada di katalog.");
+          }
+          categoryCodes = existing?.categories
+            .filter((category) => category.providers.some((provider) => providerCodes?.includes(provider.code)))
+            .map((category) => category.code);
+        }
+
         const incoming = await fetchFullCatalog({
           categoryCodes,
+          providerCodes,
           onProgress(progress) {
             send({ type: "progress", ...progress });
           },
         });
-        const catalog = categoryCodes ? mergeCatalog(existing, incoming) : incoming;
+        const catalog = partial ? mergeCatalog(existing, incoming, { mergeProviders: Boolean(providerCodes) }) : incoming;
         await saveCatalog(catalog);
         send({
           type: "done",

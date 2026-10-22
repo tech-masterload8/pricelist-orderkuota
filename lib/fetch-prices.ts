@@ -127,6 +127,7 @@ async function fetchProviderProducts(providerCode: string) {
 export async function fetchFullCatalog(options?: {
   onProgress?: (progress: FetchProgress) => void;
   categoryCodes?: string[];
+  providerCodes?: string[];
 }): Promise<Catalog> {
   const categoryBody = await getJson("/api/v1/prices/categories");
   if (categoryBody.success !== true || !Array.isArray(categoryBody.data)) {
@@ -166,7 +167,7 @@ export async function fetchFullCatalog(options?: {
     const providers = body.data.flatMap((entry) => {
       if (!isRecord(entry) || typeof entry.code !== "string" || typeof entry.name !== "string") return [];
       return [{ code: entry.code, name: entry.name }];
-    });
+    }).filter((provider) => !options?.providerCodes || options.providerCodes.includes(provider.code));
     return { category, providers };
   });
 
@@ -175,7 +176,7 @@ export async function fetchFullCatalog(options?: {
   );
 
   if (jobs.length === 0) {
-    throw new Error("Tidak ada provider pada daftar harga.");
+    throw new Error(options?.providerCodes ? "Operator yang dipilih tidak ditemukan." : "Tidak ada provider pada daftar harga.");
   }
 
   let completed = 0;

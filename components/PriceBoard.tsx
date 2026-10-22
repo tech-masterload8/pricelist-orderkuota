@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CatalogIndex, Product } from "@/lib/types";
-import { readUpdateSelection } from "@/lib/update-selection";
+import { describeUpdateSelection, readUpdateSelection, type UpdateSelection } from "@/lib/update-selection";
 
 type Selection = {
   categoryCode: string;
@@ -49,12 +49,12 @@ export default function PriceBoard() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [updateCategories, setUpdateCategories] = useState<string[] | null>(null);
+  const [updateSelection, setUpdateSelection] = useState<UpdateSelection | null>(null);
   const selectedRef = useRef<Selection | null>(null);
   selectedRef.current = selected;
 
   useEffect(() => {
-    setUpdateCategories(readUpdateSelection());
+    setUpdateSelection(readUpdateSelection());
   }, [reloadToken]);
 
   useEffect(() => {
@@ -187,7 +187,13 @@ export default function PriceBoard() {
       const response = await fetch("/api/update", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updateCategories ? { categories: updateCategories } : {}),
+        body: JSON.stringify(
+          updateSelection && "providers" in updateSelection
+            ? { providers: updateSelection.providers }
+            : updateSelection && "categories" in updateSelection
+              ? { categories: updateSelection.categories }
+              : {},
+        ),
       });
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -248,9 +254,7 @@ export default function PriceBoard() {
 
   const selectedCategory = index?.categories.find((category) => category.code === selected?.categoryCode);
   const selectedProvider = selectedCategory?.providers.find((provider) => provider.code === selected?.providerCode);
-  const updateCategoryNames = updateCategories
-    ? (index?.categories.filter((category) => updateCategories.includes(category.code)).map((category) => category.name) ?? [])
-    : null;
+  const updateSummary = describeUpdateSelection(index, updateSelection);
 
   return (
     <main className="page">
@@ -262,7 +266,7 @@ export default function PriceBoard() {
             {index
               ? `Diperbarui ${formatFetchedAt(index.fetchedAt)} WIB · ${index.productCount.toLocaleString("id-ID")} produk · ${index.providerCount.toLocaleString("id-ID")} provider`
               : "Harga tidak diambil otomatis."}
-            {updateCategoryNames ? ` · Pembaruan berikutnya: ${updateCategoryNames.join(", ")}` : " · Pembaruan berikutnya: semua kategori"}
+            {` · Pembaruan berikutnya: ${updateSummary}`}
           </p>
         </div>
         <div className="top-actions">
