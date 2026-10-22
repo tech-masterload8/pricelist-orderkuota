@@ -354,35 +354,22 @@ tbody tr:hover { background: #f7fbf9; }
 }
 
 .choice-expand > span:first-child,
-.choice span {
+.operator-list .choice > span {
   display: grid;
   gap: 2px;
 }
 
-.choice-cue {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  min-height: 32px;
-  border-radius: 999px;
-  padding: 0 10px 0 12px;
-  background: #e7f5f0;
-  color: #0f6e56;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.choice-item:hover .choice-cue,
-.choice-item.is-open .choice-cue {
-  background: #0f6e56;
-  color: white;
-}
-
 .chevron {
-  width: 16px;
-  height: 16px;
-  transition: transform 0.15s ease;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  color: #8b97a8;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.choice-item:hover .chevron,
+.choice-item.is-open .chevron {
+  color: #0f6e56;
 }
 
 .choice-expand[aria-expanded="true"] .chevron {
