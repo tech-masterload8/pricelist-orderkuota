@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CatalogIndex, Product } from "@/lib/types";
+import { readUpdateSelection } from "@/lib/update-selection";
 
 type Selection = {
   categoryCode: string;
@@ -47,8 +49,13 @@ export default function PriceBoard() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [updateCategories, setUpdateCategories] = useState<string[] | null>(null);
   const selectedRef = useRef<Selection | null>(null);
   selectedRef.current = selected;
+
+  useEffect(() => {
+    setUpdateCategories(readUpdateSelection());
+  }, [reloadToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -177,8 +184,16 @@ export default function PriceBoard() {
     setProgress(null);
 
     try {
-      const response = await fetch("/api/update", { method: "POST" });
-      if (!response.ok || !response.body) {
+      const response = await fetch("/api/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updateCategories ? { categories: updateCategories } : {}),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Pembaruan harga tidak bisa dimulai.");
+      }
+      if (!response.body) {
         throw new Error("Pembaruan harga tidak bisa dimulai.");
       }
 
@@ -233,6 +248,9 @@ export default function PriceBoard() {
 
   const selectedCategory = index?.categories.find((category) => category.code === selected?.categoryCode);
   const selectedProvider = selectedCategory?.providers.find((provider) => provider.code === selected?.providerCode);
+  const updateCategoryNames = updateCategories
+    ? (index?.categories.filter((category) => updateCategories.includes(category.code)).map((category) => category.name) ?? [])
+    : null;
 
   return (
     <main className="page">
@@ -244,11 +262,17 @@ export default function PriceBoard() {
             {index
               ? `Diperbarui ${formatFetchedAt(index.fetchedAt)} WIB · ${index.productCount.toLocaleString("id-ID")} produk · ${index.providerCount.toLocaleString("id-ID")} provider`
               : "Harga tidak diambil otomatis."}
+            {updateCategoryNames ? ` · Pembaruan berikutnya: ${updateCategoryNames.join(", ")}` : " · Pembaruan berikutnya: semua kategori"}
           </p>
         </div>
-        <button className="update-button" type="button" onClick={() => void updatePrices()} disabled={updating} aria-busy={updating}>
-          {updating ? "Memperbarui…" : "Update Harga"}
-        </button>
+        <div className="top-actions">
+          <Link className="pick-button" href="/kategori">
+            Pilih Kategori Produk
+          </Link>
+          <button className="update-button" type="button" onClick={() => void updatePrices()} disabled={updating} aria-busy={updating}>
+            {updating ? "Memperbarui…" : "Update Harga"}
+          </button>
+        </div>
       </header>
 
       {updateError ? <p className="notice" role="alert">{updateError}</p> : null}
@@ -368,7 +392,7 @@ export default function PriceBoard() {
       ) : null}
 
       <p className="footer">
-        Sumber data adalah daftar harga publik Orderkuota. Situs ini tidak berafiliasi dengan Orderkuota, dan tidak mengambil harga ulang sampai Update Harga diklik.
+        Sumber data adalah daftar harga publik Orderkuota. Situs ini tidak berafiliasi dengan Orderkuota. Update Harga hanya mengambil kategori yang dipilih.
       </p>
     </main>
   );

@@ -73,6 +73,29 @@ h1 {
   cursor: pointer;
 }
 
+.top-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.pick-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border: 1px solid #c9d4e2;
+  border-radius: 12px;
+  padding: 0 16px;
+  background: white;
+  color: #172033;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
 .update-button:disabled {
   cursor: wait;
   opacity: 0.72;
@@ -252,6 +275,46 @@ tbody tr:hover { background: #f7fbf9; }
   margin: 18px 0 0;
   color: #6a788c;
   font-size: 13px;
+}
+
+.picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.choice-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #e7edf3;
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.choice input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.choice span {
+  display: grid;
+  gap: 2px;
+}
+
+.choice small {
+  color: #5d6b80;
 }
 
 @media (max-width: 860px) {

@@ -89,6 +89,41 @@ export async function readCatalog(): Promise<Catalog> {
   return memoryCatalog;
 }
 
+export function mergeCatalog(existing: Catalog | null, incoming: Catalog): Catalog {
+  if (!existing) return recount(incoming);
+
+  const incomingByCode = new Map(incoming.categories.map((category) => [category.code, category]));
+  const replaced = new Set<string>();
+  const categories = existing.categories.map((category) => {
+    const replacement = incomingByCode.get(category.code);
+    if (!replacement) return category;
+    replaced.add(category.code);
+    return replacement;
+  });
+
+  for (const category of incoming.categories) {
+    if (!replaced.has(category.code)) categories.push(category);
+  }
+
+  return recount({ ...incoming, categories });
+}
+
+function recount(catalog: Catalog): Catalog {
+  let productCount = 0;
+  let providerCount = 0;
+  let failedProviders = 0;
+
+  for (const category of catalog.categories) {
+    for (const provider of category.providers) {
+      providerCount += 1;
+      productCount += provider.products.length;
+      if (provider.error) failedProviders += 1;
+    }
+  }
+
+  return { ...catalog, productCount, providerCount, failedProviders };
+}
+
 export async function saveCatalog(catalog: Catalog) {
   const body = JSON.stringify(catalog);
   let persisted = false;

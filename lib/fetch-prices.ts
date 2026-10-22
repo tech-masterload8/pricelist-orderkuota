@@ -126,6 +126,7 @@ async function fetchProviderProducts(providerCode: string) {
 
 export async function fetchFullCatalog(options?: {
   onProgress?: (progress: FetchProgress) => void;
+  categoryCodes?: string[];
 }): Promise<Catalog> {
   const categoryBody = await getJson("/api/v1/prices/categories");
   if (categoryBody.success !== true || !Array.isArray(categoryBody.data)) {
@@ -141,7 +142,23 @@ export async function fetchFullCatalog(options?: {
     throw new Error("Kategori harga kosong.");
   }
 
-  const grouped = await mapPool(categories, CONCURRENCY, async (category) => {
+  const requested = options?.categoryCodes;
+  const selectedCategories = requested
+    ? categories.filter((category) => requested.includes(category.code))
+    : categories;
+
+  if (requested) {
+    const missing = requested.filter((code) => !categories.some((category) => category.code === code));
+    if (missing.length > 0) {
+      throw new Error(`Kategori tidak ditemukan: ${missing.join(", ")}.`);
+    }
+  }
+
+  if (selectedCategories.length === 0) {
+    throw new Error("Tidak ada kategori yang dipilih.");
+  }
+
+  const grouped = await mapPool(selectedCategories, CONCURRENCY, async (category) => {
     const body = await getJson(`/api/v1/prices/categories/${encodeURIComponent(category.code)}/providers`);
     if (body.success !== true || !Array.isArray(body.data)) {
       throw new Error(`Provider untuk ${category.name} tidak bisa diambil.`);

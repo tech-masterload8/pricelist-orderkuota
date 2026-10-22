@@ -1,11 +1,30 @@
-import { acquireUpdateLock, canPersistCatalog, releaseUpdateLock, saveCatalog } from "@/lib/catalog-store";
+import { acquireUpdateLock, canPersistCatalog, mergeCatalog, readCatalog, releaseUpdateLock, saveCatalog } from "@/lib/catalog-store";
 import { fetchFullCatalog } from "@/lib/fetch-prices";
+import type { Catalog } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 300;
 
-export async function POST() {
+const CATEGORY_CODE = /^[a-z0-9_]+$/i;
+
+export async function POST(request: Request) {
+  let categoryCodes: string[] | undefined;
+  try {
+    const body: unknown = await request.json();
+    if (body && typeof body === "object" && "categories" in body && Array.isArray(body.categories)) {
+      categoryCodes = body.categories.filter((code): code is string => typeof code === "string" && CATEGORY_CODE.test(code));
+      if (categoryCodes.length === 0) {
+        return Response.json(
+          { error: "Pilih minimal satu kategori sebelum memperbarui harga." },
+          { status: 400 },
+        );
+      }
+    }
+  } catch {
+    categoryCodes = undefined;
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -30,11 +49,22 @@ export async function POST() {
       }
 
       try {
-        const catalog = await fetchFullCatalog({
+        let existing: Catalog | null = null;
+        if (categoryCodes) {
+          try {
+            existing = await readCatalog();
+          } catch {
+            throw new Error("Katalog lama tidak bisa dibaca, jadi pembaruan sebagian dibatalkan.");
+          }
+        }
+
+        const incoming = await fetchFullCatalog({
+          categoryCodes,
           onProgress(progress) {
             send({ type: "progress", ...progress });
           },
         });
+        const catalog = categoryCodes ? mergeCatalog(existing, incoming) : incoming;
         await saveCatalog(catalog);
         send({
           type: "done",
