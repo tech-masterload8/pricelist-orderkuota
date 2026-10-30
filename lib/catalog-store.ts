@@ -70,7 +70,7 @@ async function writeBlobText(pathname: string, body: string) {
 }
 
 export async function readCatalog(): Promise<Catalog> {
-  if (memoryCatalog) return memoryCatalog;
+  if (memoryCatalog && !process.env.VERCEL) return memoryCatalog;
 
   if (blobConfigured()) {
     try {
@@ -150,16 +150,18 @@ export async function saveCatalog(catalog: Catalog) {
     persisted = true;
   }
 
-  try {
-    await mkdir(path.dirname(CATALOG_PATH), { recursive: true });
-    const temporaryPath = `${CATALOG_PATH}.tmp`;
-    await writeFile(temporaryPath, body);
-    await rm(CATALOG_PATH, { force: true });
-    await rename(temporaryPath, CATALOG_PATH);
-    persisted = true;
-  } catch (error) {
-    if (!persisted) throw error;
-    console.error("Katalog tersimpan di Blob. Salinan disk tidak bisa ditulis.", error);
+  if (!process.env.VERCEL) {
+    try {
+      await mkdir(path.dirname(CATALOG_PATH), { recursive: true });
+      const temporaryPath = `${CATALOG_PATH}.tmp`;
+      await writeFile(temporaryPath, body);
+      await rm(CATALOG_PATH, { force: true });
+      await rename(temporaryPath, CATALOG_PATH);
+      persisted = true;
+    } catch (error) {
+      if (!persisted) throw error;
+      console.error("Katalog tersimpan di Blob. Salinan disk tidak bisa ditulis.", error);
+    }
   }
 
   memoryCatalog = catalog;
@@ -199,6 +201,8 @@ async function writeLock(lock: LockFile | null) {
       }
     }
   }
+
+  if (process.env.VERCEL) return;
 
   try {
     if (!lock) {
