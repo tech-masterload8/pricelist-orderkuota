@@ -40,12 +40,20 @@ export type CategorySummary = {
   providers: ProviderSummary[];
 };
 
+export type UpdateReport = {
+  state: "running" | "error" | "warning";
+  at: string;
+  message: string;
+  details: string[];
+};
+
 export type CatalogIndex = {
   fetchedAt: string;
   productCount: number;
   providerCount: number;
   failedProviders: number;
   categories: CategorySummary[];
+  report: UpdateReport | null;
 };
 
 export type FetchProgress = {

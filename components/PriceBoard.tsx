@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CatalogIndex, Product } from "@/lib/types";
+import type { CatalogIndex, Product, UpdateReport } from "@/lib/types";
 import { describeUpdateSelection, readUpdateSelection, type UpdateSelection } from "@/lib/update-selection";
 
 type Selection = {
@@ -22,6 +22,33 @@ type ProviderResponse = {
   error: string | null;
   products: Product[];
 };
+
+function ReportBanner({ report }: { report: UpdateReport }) {
+  const title =
+    report.state === "warning"
+      ? "Pembaruan selesai dengan catatan"
+      : report.state === "running"
+        ? "Pembaruan sedang berjalan"
+        : "Pembaruan harga gagal";
+  const tone = report.state === "warning" ? "notice warning" : report.state === "running" ? "notice running" : "notice";
+
+  return (
+    <section className={tone} role="alert">
+      <strong>{title}</strong>
+      <p>
+        {formatFetchedAt(report.at)} WIB. {report.message}
+      </p>
+      {report.details.length > 0 ? (
+        <ul>
+          {report.details.map((detail, index) => (
+            <li key={`${index}-${detail}`}>{detail}</li>
+          ))}
+        </ul>
+      ) : null}
+      {report.state === "running" ? null : <p className="notice-hint">Salin pesan ini dan beri tahu admin.</p>}
+    </section>
+  );
+}
 
 function formatFetchedAt(iso: string) {
   const date = new Date(iso);
@@ -47,7 +74,7 @@ export default function PriceBoard() {
   const [reloadToken, setReloadToken] = useState(0);
   const [updating, setUpdating] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
-  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateError, setUpdateError] = useState<UpdateReport | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [updateSelection, setUpdateSelection] = useState<UpdateSelection | null>(null);
   const selectedRef = useRef<Selection | null>(null);
@@ -221,6 +248,7 @@ export default function PriceBoard() {
           const event = JSON.parse(line.slice(5).trim()) as {
             type: string;
             message?: string;
+            details?: string[];
             completed?: number;
             total?: number;
             providerName?: string;
@@ -234,19 +262,31 @@ export default function PriceBoard() {
             });
           }
           if (event.type === "error") {
-            throw new Error(event.message || "Pembaruan harga gagal.");
+            const failure = new Error(event.message || "Pembaruan harga gagal.") as Error & { details?: string[] };
+            failure.details = Array.isArray(event.details) ? event.details : [];
+            throw failure;
           }
           if (event.type === "done") finished = true;
         }
       }
 
       if (!finished) {
-        throw new Error("Pembaruan terputus sebelum selesai. Katalog lama tetap dipakai.");
+        const failure = new Error("Pembaruan terputus sebelum selesai. Katalog lama tetap dipakai.") as Error & { details?: string[] };
+        failure.details = ["Koneksi ke server terputus sebelum pembaruan selesai."];
+        throw failure;
       }
 
       setReloadToken((current) => current + 1);
     } catch (error) {
-      setUpdateError(error instanceof Error ? error.message : "Pembaruan harga gagal.");
+      const details = error instanceof Error && Array.isArray((error as Error & { details?: unknown }).details)
+        ? (error as Error & { details: string[] }).details
+        : [];
+      setUpdateError({
+        state: "error",
+        at: new Date().toISOString(),
+        message: error instanceof Error ? error.message : "Pembaruan harga gagal.",
+        details,
+      });
     } finally {
       setUpdating(false);
     }
@@ -279,7 +319,8 @@ export default function PriceBoard() {
         </div>
       </header>
 
-      {updateError ? <p className="notice" role="alert">{updateError}</p> : null}
+      {!updating && updateError ? <ReportBanner report={updateError} /> : null}
+      {!updating && !updateError && index?.report ? <ReportBanner report={index.report} /> : null}
       {updating ? (
         <p className="progress" aria-live="polite">
           {progress

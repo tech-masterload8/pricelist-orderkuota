@@ -5,6 +5,7 @@ node_modules
 .env.local
 .env*.local
 data/update-lock.json
+data/update-report.json
 *.log
 .env*
 tsconfig.tsbuildinfo

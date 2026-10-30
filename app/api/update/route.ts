@@ -1,10 +1,18 @@
-import { acquireUpdateLock, canPersistCatalog, mergeCatalog, readCatalog, releaseUpdateLock, saveCatalog } from "@/lib/catalog-store";
-import { fetchFullCatalog } from "@/lib/fetch-prices";
-import type { Catalog } from "@/lib/types";
+import { acquireUpdateLock, canPersistCatalog, limitReportDetails, mergeCatalog, readCatalog, releaseUpdateLock, saveCatalog, writeUpdateReport } from "@/lib/catalog-store";
+import { fetchFullCatalog, PriceFetchError } from "@/lib/fetch-prices";
+import type { Catalog, UpdateReport } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 300;
+
+function collectFailureDetails(catalog: Catalog) {
+  return catalog.categories.flatMap((category) =>
+    category.providers.flatMap((provider) =>
+      provider.error ? [`${category.name} / ${provider.name}: ${provider.error}`] : [],
+    ),
+  );
+}
 
 const CATEGORY_CODE = /^[a-z0-9_]+$/i;
 const PROVIDER_CODE = /^prv_[a-z0-9]+$/i;
@@ -54,12 +62,18 @@ export async function POST(request: Request) {
 
       const lock = await acquireUpdateLock();
       if (!lock.ok) {
-        send({ type: "error", message: lock.message });
+        send({ type: "error", message: lock.message, details: [] });
         controller.close();
         return;
       }
 
       try {
+        await writeUpdateReport({
+          state: "running",
+          at: new Date().toISOString(),
+          message: "Pembaruan sedang berjalan.",
+          details: [],
+        });
         const partial = Boolean(categoryCodes || providerCodes);
         let existing: Catalog | null = null;
         if (partial) {
@@ -90,6 +104,17 @@ export async function POST(request: Request) {
         });
         const catalog = partial ? mergeCatalog(existing, incoming, { mergeProviders: Boolean(providerCodes) }) : incoming;
         await saveCatalog(catalog);
+        const failureDetails = limitReportDetails(collectFailureDetails(incoming));
+        if (failureDetails.length > 0) {
+          await writeUpdateReport({
+            state: "warning",
+            at: catalog.fetchedAt,
+            message: `${incoming.failedProviders} operator gagal diambil. Harga operator itu tidak diganti.`,
+            details: failureDetails,
+          });
+        } else {
+          await writeUpdateReport(null);
+        }
         send({
           type: "done",
           fetchedAt: catalog.fetchedAt,
@@ -99,7 +124,19 @@ export async function POST(request: Request) {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Pembaruan harga gagal.";
-        send({ type: "error", message });
+        const details = limitReportDetails(error instanceof PriceFetchError ? error.details : []);
+        const report: UpdateReport = {
+          state: "error",
+          at: new Date().toISOString(),
+          message,
+          details,
+        };
+        try {
+          await writeUpdateReport(report);
+        } catch (persistError) {
+          console.error("Gagal menyimpan laporan pembaruan.", persistError);
+        }
+        send({ type: "error", message, details });
       } finally {
         await releaseUpdateLock();
         controller.close();

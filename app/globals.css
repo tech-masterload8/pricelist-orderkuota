@@ -110,6 +110,42 @@ h1 {
   color: #8d2b24;
 }
 
+.notice strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.notice p {
+  margin: 0;
+}
+
+.notice ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.notice li + li {
+  margin-top: 4px;
+}
+
+.notice-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.notice.warning {
+  border-color: #edd7a4;
+  background: #fff8eb;
+  color: #7a4b00;
+}
+
+.notice.running {
+  border-color: #c9d8ea;
+  background: #f4f8fc;
+  color: #24415f;
+}
+
 .progress {
   margin: -4px 0 16px;
   color: #0f6e56;

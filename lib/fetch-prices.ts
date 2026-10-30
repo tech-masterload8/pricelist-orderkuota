@@ -25,6 +25,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+export class PriceFetchError extends Error {
+  details: string[];
+
+  constructor(message: string, details: string[] = []) {
+    super(message);
+    this.name = "PriceFetchError";
+    this.details = details;
+  }
+}
+
+function remoteMessage(body: Record<string, unknown>) {
+  const remote = [body.message, body.error].find((item) => typeof item === "string" && item.trim());
+  return typeof remote === "string" ? ` Pesan server: ${remote.trim().slice(0, 180)}.` : "";
+}
+
+function unexpectedResponse(pathname: string, body: Record<string, unknown>, expected: string): never {
+  throw new PriceFetchError(`Endpoint Orderkuota berubah (${pathname}): ${expected}.${remoteMessage(body)}`);
+}
+
 function formatPrice(price: PricePayload | undefined) {
   if (typeof price?.formatted === "string" && price.formatted.trim()) {
     return price.formatted.trim();
@@ -51,17 +70,31 @@ async function getJson(pathname: string, attempt = 0): Promise<Record<string, un
     }
 
     if (!response.ok) {
-      throw new Error(`Permintaan gagal (${response.status}) untuk ${pathname}`);
+      const kind = response.status === 404 ? "Endpoint Orderkuota tidak ditemukan" : "Permintaan ke Orderkuota gagal";
+      throw new Error(`${kind} (${response.status}) pada ${pathname}`);
     }
 
-    const body: unknown = await response.json();
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new Error(`Endpoint Orderkuota berubah (${pathname}): respons bukan JSON.`);
+    }
     if (!isRecord(body)) {
-      throw new Error(`Respons tidak valid untuk ${pathname}`);
+      throw new Error(`Endpoint Orderkuota berubah (${pathname}): respons bukan objek JSON.`);
     }
     return body;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (attempt < 3 && !message.startsWith("Permintaan gagal") && !message.startsWith("Respons tidak valid")) {
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    if (timedOut && attempt < 3) {
+      await sleep(500 * 2 ** attempt);
+      return getJson(pathname, attempt + 1);
+    }
+    if (timedOut) {
+      throw new Error(`Orderkuota tidak menjawab dalam 25 detik pada ${pathname}`);
+    }
+    if (attempt < 3 && !message.startsWith("Permintaan ke Orderkuota") && !message.startsWith("Endpoint Orderkuota")) {
       await sleep(500 * 2 ** attempt);
       return getJson(pathname, attempt + 1);
     }
@@ -94,13 +127,25 @@ async function fetchProviderProducts(providerCode: string) {
 
   while (page <= totalPages && page <= MAX_PAGES) {
     const body = await getJson(`/api/v1/prices/providers/${encodeURIComponent(providerCode)}?page=${page}`);
-    if (body.success !== true) break;
+    if (body.success !== true) {
+      unexpectedResponse(`/api/v1/prices/providers/${providerCode}?page=${page}`, body, "permintaan produk ditolak");
+    }
 
     const pagination = isRecord(body.pagination) ? body.pagination : {};
     const reportedPages = Number(pagination.total_pages);
     totalPages = Number.isFinite(reportedPages) && reportedPages >= 1 ? reportedPages : 1;
 
     const rows = Array.isArray(body.data) ? (body.data as ProductRow[]) : [];
+    if (!Array.isArray(body.data)) {
+      unexpectedResponse(`/api/v1/prices/providers/${providerCode}?page=${page}`, body, "daftar produk tidak ditemukan");
+    }
+    if (rows.length > 0 && rows.every((row) => !row || typeof row.id !== "number")) {
+      unexpectedResponse(
+        `/api/v1/prices/providers/${providerCode}?page=${page}`,
+        body,
+        "field id produk tidak ada",
+      );
+    }
     if (rows.length === 0) break;
 
     let added = 0;
@@ -131,7 +176,7 @@ export async function fetchFullCatalog(options?: {
 }): Promise<Catalog> {
   const categoryBody = await getJson("/api/v1/prices/categories");
   if (categoryBody.success !== true || !Array.isArray(categoryBody.data)) {
-    throw new Error("Daftar kategori harga tidak bisa diambil.");
+    unexpectedResponse("/api/v1/prices/categories", categoryBody, "daftar kategori tidak ditemukan");
   }
 
   const categories = categoryBody.data.flatMap((entry) => {
@@ -140,7 +185,7 @@ export async function fetchFullCatalog(options?: {
   });
 
   if (categories.length === 0) {
-    throw new Error("Kategori harga kosong.");
+    unexpectedResponse("/api/v1/prices/categories", categoryBody, "kategori tidak punya kode dan nama");
   }
 
   const requested = options?.categoryCodes;
@@ -162,12 +207,24 @@ export async function fetchFullCatalog(options?: {
   const grouped = await mapPool(selectedCategories, CONCURRENCY, async (category) => {
     const body = await getJson(`/api/v1/prices/categories/${encodeURIComponent(category.code)}/providers`);
     if (body.success !== true || !Array.isArray(body.data)) {
-      throw new Error(`Provider untuk ${category.name} tidak bisa diambil.`);
+      unexpectedResponse(
+        `/api/v1/prices/categories/${category.code}/providers`,
+        body,
+        `daftar operator untuk ${category.name} tidak ditemukan`,
+      );
     }
-    const providers = body.data.flatMap((entry) => {
+    const parsed = body.data.flatMap((entry) => {
       if (!isRecord(entry) || typeof entry.code !== "string" || typeof entry.name !== "string") return [];
       return [{ code: entry.code, name: entry.name }];
-    }).filter((provider) => !options?.providerCodes || options.providerCodes.includes(provider.code));
+    });
+    if (body.data.length > 0 && parsed.length === 0) {
+      unexpectedResponse(
+        `/api/v1/prices/categories/${category.code}/providers`,
+        body,
+        `operator ${category.name} tidak punya kode dan nama`,
+      );
+    }
+    const providers = parsed.filter((provider) => !options?.providerCodes || options.providerCodes.includes(provider.code));
     return { category, providers };
   });
 
@@ -197,10 +254,15 @@ export async function fetchFullCatalog(options?: {
     }
   });
 
-  const failedProviders = loaded.filter((job) => job.error).length;
+  const categoryNames = new Map(grouped.map((group) => [group.category.code, group.category.name]));
+  const failureDetails = loaded.flatMap((job) =>
+    job.error ? [`${categoryNames.get(job.categoryCode) ?? job.categoryCode} / ${job.provider.name}: ${job.error}`] : [],
+  );
+  const failedProviders = failureDetails.length;
   if (failedProviders / jobs.length > 0.15) {
-    throw new Error(
-      `${failedProviders} dari ${jobs.length} provider gagal diambil. Katalog yang tersimpan tidak diganti.`,
+    throw new PriceFetchError(
+      `${failedProviders} dari ${jobs.length} operator gagal diambil, jadi katalog lama tidak diganti.`,
+      failureDetails,
     );
   }
 

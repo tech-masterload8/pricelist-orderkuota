@@ -1,11 +1,14 @@
 import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
 import path from "path";
-import type { Catalog, CategoryCatalog, CatalogIndex, ProviderCatalog } from "./types";
+import type { Catalog, CategoryCatalog, CatalogIndex, ProviderCatalog, UpdateReport } from "./types";
 
 const CATALOG_PATH = path.join(process.cwd(), "data", "catalog.json");
 const LOCK_PATH = path.join(process.cwd(), "data", "update-lock.json");
+const REPORT_PATH = path.join(process.cwd(), "data", "update-report.json");
 const BLOB_PATH = "catalog/catalog.json";
 const BLOB_LOCK_PATH = "catalog/update-lock.json";
+const BLOB_REPORT_PATH = "catalog/update-report.json";
+const STALE_RUNNING_MS = 7 * 60 * 1000;
 const LOCK_TTL_MS = 20 * 60 * 1000;
 
 let memoryCatalog: Catalog | null = null;
@@ -25,6 +28,7 @@ export function toIndex(catalog: Catalog): CatalogIndex {
     productCount: catalog.productCount,
     providerCount: catalog.providerCount,
     failedProviders: catalog.failedProviders,
+    report: null,
     categories: catalog.categories.map((category) => ({
       code: category.code,
       name: category.name,
@@ -236,6 +240,78 @@ export async function acquireUpdateLock(): Promise<{ ok: true } | { ok: false; m
   }
 
   return { ok: true };
+}
+
+function parseUpdateReport(text: string): UpdateReport | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== "object") return null;
+    const report = value as Partial<UpdateReport>;
+    if (report.state !== "running" && report.state !== "error" && report.state !== "warning") return null;
+    if (typeof report.at !== "string" || typeof report.message !== "string") return null;
+    const details = Array.isArray(report.details) ? report.details.filter((item): item is string => typeof item === "string") : [];
+    return { state: report.state, at: report.at, message: report.message, details };
+  } catch {
+    return null;
+  }
+}
+
+async function readStoredUpdateReport(): Promise<UpdateReport | null> {
+  if (blobConfigured()) {
+    try {
+      const text = await readBlobText(BLOB_REPORT_PATH);
+      if (text) return parseUpdateReport(text);
+    } catch (error) {
+      console.error("Gagal membaca laporan pembaruan.", error);
+    }
+  }
+
+  try {
+    return parseUpdateReport(await readFile(REPORT_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export async function readUpdateReport(): Promise<UpdateReport | null> {
+  const report = await readStoredUpdateReport();
+  if (!report) return null;
+  if (report.state === "running" && Date.now() - Date.parse(report.at) > STALE_RUNNING_MS) {
+    return {
+      state: "error",
+      at: report.at,
+      message: "Pembaruan terputus sebelum selesai. Katalog lama tetap dipakai.",
+      details: ["Server berhenti sebelum hasil pembaruan tersimpan."],
+    };
+  }
+  return report;
+}
+
+export async function writeUpdateReport(report: UpdateReport | null) {
+  if (!report) {
+    if (blobConfigured()) {
+      try {
+        const { del } = await import("@vercel/blob");
+        await del(BLOB_REPORT_PATH);
+      } catch {
+        // A missing report is already clear.
+      }
+    }
+    if (!process.env.VERCEL) await rm(REPORT_PATH, { force: true });
+    return;
+  }
+
+  const body = JSON.stringify(report);
+  if (blobConfigured()) await writeBlobText(BLOB_REPORT_PATH, body);
+  if (process.env.VERCEL) return;
+
+  await mkdir(path.dirname(REPORT_PATH), { recursive: true });
+  await writeFile(REPORT_PATH, body);
+}
+
+export function limitReportDetails(details: string[], limit = 8) {
+  if (details.length <= limit) return details;
+  return [...details.slice(0, limit), `dan ${details.length - limit} operator lain gagal.`];
 }
 
 export async function releaseUpdateLock() {
