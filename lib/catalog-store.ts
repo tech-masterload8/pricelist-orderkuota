@@ -5,9 +5,12 @@ import type { Catalog, CategoryCatalog, CatalogIndex, ProviderCatalog, UpdateRep
 const CATALOG_PATH = path.join(process.cwd(), "data", "catalog.json");
 const LOCK_PATH = path.join(process.cwd(), "data", "update-lock.json");
 const REPORT_PATH = path.join(process.cwd(), "data", "update-report.json");
+const AUTO_SELECTION_PATH = path.join(process.cwd(), "data", "auto-selection.json");
 const BLOB_PATH = "catalog/catalog.json";
 const BLOB_LOCK_PATH = "catalog/update-lock.json";
 const BLOB_REPORT_PATH = "catalog/update-report.json";
+const BLOB_AUTO_SELECTION_PATH = "catalog/auto-selection.json";
+const PROVIDER_CODE = /^prv_[a-z0-9]+$/i;
 const STALE_RUNNING_MS = 7 * 60 * 1000;
 const LOCK_TTL_MS = 20 * 60 * 1000;
 
@@ -102,7 +105,8 @@ export function mergeCatalog(existing: Catalog | null, incoming: Catalog, option
     const replacement = incomingByCode.get(category.code);
     if (!replacement) return category;
     replaced.add(category.code);
-    return options?.mergeProviders ? mergeProviders(category, replacement) : replacement;
+    const merged = options?.mergeProviders ? mergeProviders(category, replacement) : replacement;
+    return preserveFailedProviders(category, merged);
   });
 
   for (const category of incoming.categories) {
@@ -127,6 +131,19 @@ function mergeProviders(existing: CategoryCatalog, incoming: CategoryCatalog): C
   }
 
   return { ...incoming, providers };
+}
+
+function preserveFailedProviders(existing: CategoryCatalog, incoming: CategoryCatalog): CategoryCatalog {
+  const previous = new Map(existing.providers.map((provider) => [provider.code, provider]));
+  return {
+    ...incoming,
+    providers: incoming.providers.map((provider) => {
+      if (!provider.error) return provider;
+      const prior = previous.get(provider.code);
+      if (!prior) return provider;
+      return { ...prior, name: provider.name || prior.name, error: provider.error };
+    }),
+  };
 }
 
 function recount(catalog: Catalog): Catalog {
@@ -312,6 +329,46 @@ export async function writeUpdateReport(report: UpdateReport | null) {
 export function limitReportDetails(details: string[], limit = 8) {
   if (details.length <= limit) return details;
   return [...details.slice(0, limit), `dan ${details.length - limit} operator lain gagal.`];
+}
+
+export async function readAutoSelection(): Promise<string[]> {
+  let text: string | null = null;
+  if (blobConfigured()) {
+    try {
+      text = await readBlobText(BLOB_AUTO_SELECTION_PATH);
+    } catch (error) {
+      console.error("Gagal membaca pilihan auto update.", error);
+    }
+  }
+
+  if (!text) {
+    try {
+      text = await readFile(AUTO_SELECTION_PATH, "utf8");
+    } catch {
+      return [];
+    }
+  }
+
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== "object" || !("providers" in value) || !Array.isArray(value.providers)) return [];
+    return value.providers.filter((code): code is string => typeof code === "string" && PROVIDER_CODE.test(code));
+  } catch {
+    return [];
+  }
+}
+
+export async function writeAutoSelection(providers: string[]) {
+  const unique = [...new Set(providers.filter((code) => PROVIDER_CODE.test(code)))];
+  const body = JSON.stringify({ providers: unique });
+  if (blobConfigured()) await writeBlobText(BLOB_AUTO_SELECTION_PATH, body);
+  if (process.env.VERCEL) {
+    if (!blobConfigured()) throw new Error("Penyimpanan belum terhubung, jadi pilihan auto update tidak disimpan.");
+    return;
+  }
+
+  await mkdir(path.dirname(AUTO_SELECTION_PATH), { recursive: true });
+  await writeFile(AUTO_SELECTION_PATH, body);
 }
 
 export async function releaseUpdateLock() {

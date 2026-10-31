@@ -6,6 +6,8 @@ node_modules
 .env*.local
 data/update-lock.json
 data/update-report.json
+data/auto-selection.json
+.vercel-login
 *.log
 .env*
 tsconfig.tsbuildinfo

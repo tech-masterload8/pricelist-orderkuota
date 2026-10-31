@@ -61,7 +61,7 @@ function formatFetchedAt(iso: string) {
 }
 
 export default function PriceBoard() {
-  const [index, setIndex] = useState<CatalogIndex | null>(null);
+  const [index, setIndex] = useState<(CatalogIndex & { autoProviderCount?: number }) | null>(null);
   const [status, setStatus] = useState<"loading" | "empty" | "ready" | "error">("loading");
   const [pageError, setPageError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selection | null>(null);
@@ -307,9 +307,17 @@ export default function PriceBoard() {
               ? `Diperbarui ${formatFetchedAt(index.fetchedAt)} WIB · ${index.productCount.toLocaleString("id-ID")} produk · ${index.providerCount.toLocaleString("id-ID")} provider`
               : "Harga tidak diambil otomatis."}
             {` · Pembaruan berikutnya: ${updateSummary}`}
+            {index
+              ? index.autoProviderCount
+                ? ` · Auto update: ${index.autoProviderCount.toLocaleString("id-ID")} operator setiap 10 menit`
+                : " · Auto update: tidak aktif"
+              : ""}
           </p>
         </div>
         <div className="top-actions">
+          <Link className="pick-button" href="/auto">
+            Auto Update
+          </Link>
           <Link className="pick-button" href="/kategori">
             Pilih Kategori Produk
           </Link>

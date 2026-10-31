@@ -1,18 +1,10 @@
-import { acquireUpdateLock, canPersistCatalog, limitReportDetails, mergeCatalog, readCatalog, releaseUpdateLock, saveCatalog, writeUpdateReport } from "@/lib/catalog-store";
-import { fetchFullCatalog, PriceFetchError } from "@/lib/fetch-prices";
-import type { Catalog, UpdateReport } from "@/lib/types";
+import { PriceFetchError } from "@/lib/fetch-prices";
+import { limitReportDetails } from "@/lib/catalog-store";
+import { runPriceUpdate } from "@/lib/run-update";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 300;
-
-function collectFailureDetails(catalog: Catalog) {
-  return catalog.categories.flatMap((category) =>
-    category.providers.flatMap((provider) =>
-      provider.error ? [`${category.name} / ${provider.name}: ${provider.error}`] : [],
-    ),
-  );
-}
 
 const CATEGORY_CODE = /^[a-z0-9_]+$/i;
 const PROVIDER_CODE = /^prv_[a-z0-9]+$/i;
@@ -51,94 +43,26 @@ export async function POST(request: Request) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
       };
 
-      if (!canPersistCatalog()) {
-        send({
-          type: "error",
-          message: "Penyimpanan belum terhubung, jadi pembaruan tidak dijalankan.",
-        });
-        controller.close();
-        return;
-      }
-
-      const lock = await acquireUpdateLock();
-      if (!lock.ok) {
-        send({ type: "error", message: lock.message, details: [] });
-        controller.close();
-        return;
-      }
-
       try {
-        await writeUpdateReport({
-          state: "running",
-          at: new Date().toISOString(),
-          message: "Pembaruan sedang berjalan.",
-          details: [],
-        });
-        const partial = Boolean(categoryCodes || providerCodes);
-        let existing: Catalog | null = null;
-        if (partial) {
-          try {
-            existing = await readCatalog();
-          } catch {
-            throw new Error("Katalog lama tidak bisa dibaca, jadi pembaruan sebagian dibatalkan.");
-          }
-        }
-
-        if (providerCodes) {
-          const known = new Set(existing?.categories.flatMap((category) => category.providers.map((provider) => provider.code)) ?? []);
-          providerCodes = providerCodes.filter((code) => known.has(code));
-          if (providerCodes.length === 0) {
-            throw new Error("Operator yang dipilih tidak ada di katalog.");
-          }
-          categoryCodes = existing?.categories
-            .filter((category) => category.providers.some((provider) => providerCodes?.includes(provider.code)))
-            .map((category) => category.code);
-        }
-
-        const incoming = await fetchFullCatalog({
+        const result = await runPriceUpdate({
           categoryCodes,
           providerCodes,
           onProgress(progress) {
             send({ type: "progress", ...progress });
           },
         });
-        const catalog = partial ? mergeCatalog(existing, incoming, { mergeProviders: Boolean(providerCodes) }) : incoming;
-        await saveCatalog(catalog);
-        const failureDetails = limitReportDetails(collectFailureDetails(incoming));
-        if (failureDetails.length > 0) {
-          await writeUpdateReport({
-            state: "warning",
-            at: catalog.fetchedAt,
-            message: `${incoming.failedProviders} operator gagal diambil. Harga operator itu tidak diganti.`,
-            details: failureDetails,
-          });
-        } else {
-          await writeUpdateReport(null);
-        }
         send({
           type: "done",
-          fetchedAt: catalog.fetchedAt,
-          productCount: catalog.productCount,
-          providerCount: catalog.providerCount,
-          failedProviders: catalog.failedProviders,
+          fetchedAt: result.catalog.fetchedAt,
+          productCount: result.catalog.productCount,
+          providerCount: result.catalog.providerCount,
+          failedProviders: result.catalog.failedProviders,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Pembaruan harga gagal.";
         const details = limitReportDetails(error instanceof PriceFetchError ? error.details : []);
-        const report: UpdateReport = {
-          state: "error",
-          at: new Date().toISOString(),
-          message,
-          details,
-        };
-        try {
-          await writeUpdateReport(report);
-        } catch (persistError) {
-          console.error("Gagal menyimpan laporan pembaruan.", persistError);
-        }
         send({ type: "error", message, details });
       } finally {
-        await releaseUpdateLock();
         controller.close();
       }
     },

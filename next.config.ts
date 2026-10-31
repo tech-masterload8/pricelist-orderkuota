@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
     "/api/catalog": ["./data/catalog.json"],
     "/api/catalog/providers/[code]": ["./data/catalog.json"],
     "/api/update": ["./data/catalog.json"],
+    "/api/cron/auto-update": ["./data/catalog.json"],
   },
 };
 
