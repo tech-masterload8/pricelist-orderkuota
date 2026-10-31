@@ -1,5 +1,5 @@
-import CategoryPicker from "@/components/CategoryPicker";
+import AutoUpdatePicker from "@/components/AutoUpdatePicker";
 
 export default function AutoUpdatePage() {
-  return <CategoryPicker mode="auto" />;
+  return <AutoUpdatePicker />;
 }

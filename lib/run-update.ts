@@ -9,7 +9,7 @@ import {
   writeUpdateReport,
 } from "./catalog-store";
 import { fetchFullCatalog, PriceFetchError } from "./fetch-prices";
-import type { Catalog, FetchProgress, UpdateReport } from "./types";
+import type { Catalog, FetchProgress, ProductWatch, UpdateReport } from "./types";
 
 const PROVIDER_CODE = /^prv_[a-z0-9]+$/i;
 
@@ -31,6 +31,7 @@ function collectFailureDetails(catalog: Catalog) {
 export async function runPriceUpdate(input: {
   providerCodes?: string[];
   categoryCodes?: string[];
+  watch?: ProductWatch;
   onProgress?: (progress: FetchProgress) => void;
 }): Promise<PriceUpdateResult> {
   if (!canPersistCatalog()) {
@@ -77,7 +78,9 @@ export async function runPriceUpdate(input: {
       providerCodes,
       onProgress: input.onProgress,
     });
-    const catalog = partial ? mergeCatalog(previous, incoming, { mergeProviders: Boolean(providerCodes?.length) }) : incoming;
+    const catalog = partial
+      ? mergeCatalog(previous, incoming, { mergeProviders: Boolean(providerCodes?.length), watch: input.watch })
+      : incoming;
     await saveCatalog(catalog);
     const failureDetails = limitReportDetails(collectFailureDetails(incoming));
     if (failureDetails.length > 0) {

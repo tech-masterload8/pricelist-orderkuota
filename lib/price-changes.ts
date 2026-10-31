@@ -1,4 +1,4 @@
-import type { Catalog, Product } from "./types";
+import type { Catalog, Product, ProductWatch } from "./types";
 
 const MESSAGE_LIMIT = 3800;
 
@@ -24,22 +24,27 @@ function productLines(product: Product, body: string[]) {
   return [`• ${product.code} ${product.name}`, ...body];
 }
 
-export function describePriceChanges(previous: Catalog | null, incoming: Catalog) {
+export function describePriceChanges(previous: Catalog | null, incoming: Catalog, watch?: ProductWatch) {
   const lines: string[] = ["Perubahan harga Orderkuota"];
 
   for (const category of incoming.categories) {
     const priorCategory = previous?.categories.find((item) => item.code === category.code);
     for (const provider of category.providers) {
       if (provider.error) continue;
+      const rule = watch?.get(provider.code);
+      if (watch && !rule) continue;
       const priorProvider = priorCategory?.providers.find((item) => item.code === provider.code);
       const priorProducts = new Map((priorProvider?.products ?? []).map((product) => [product.id, product]));
       const seen = new Set<number>();
       const providerLines: string[] = [];
+      const include = (productId: number) => !rule || rule === "all" || rule.has(productId);
 
       for (const product of provider.products) {
+        if (!include(product.id)) continue;
         seen.add(product.id);
         const prior = priorProducts.get(product.id);
         if (!prior) {
+          if (watch && rule !== "all") continue;
           providerLines.push(
             ...productLines(product, [
               "  produk baru",
@@ -60,7 +65,7 @@ export function describePriceChanges(previous: Catalog | null, incoming: Catalog
 
       if (priorProvider && !priorProvider.error) {
         for (const product of priorProvider.products) {
-          if (seen.has(product.id)) continue;
+          if (seen.has(product.id) || !include(product.id)) continue;
           providerLines.push(
             ...productLines(product, [
               "  produk hilang",

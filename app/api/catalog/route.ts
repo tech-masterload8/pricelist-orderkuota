@@ -1,4 +1,4 @@
-import { readAutoSelection, readCatalog, readUpdateReport, toIndex } from "@/lib/catalog-store";
+import { countSelectedProducts, readAutoSelection, readCatalog, readUpdateReport, toIndex } from "@/lib/catalog-store";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -7,8 +7,8 @@ export async function GET() {
   try {
     const catalog = await readCatalog();
     const report = await readUpdateReport();
-    const autoProviderCount = (await readAutoSelection()).length;
-    return Response.json({ ...toIndex(catalog), report, autoProviderCount }, {
+    const autoProductCount = countSelectedProducts(catalog, await readAutoSelection());
+    return Response.json({ ...toIndex(catalog), report, autoProductCount }, {
       headers: { "Cache-Control": "no-store" },
     });
   } catch {

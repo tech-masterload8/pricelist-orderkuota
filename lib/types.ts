@@ -61,3 +61,15 @@ export type FetchProgress = {
   total: number;
   providerName: string;
 };
+
+export type AutoProductSelection = {
+  providerCode: string;
+  productId: number;
+};
+
+export type AutoSelection = {
+  providers: string[];
+  products: AutoProductSelection[];
+};
+
+export type ProductWatch = ReadonlyMap<string, "all" | ReadonlySet<number>>;

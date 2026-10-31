@@ -1,4 +1,4 @@
-import { readAutoSelection, writeUpdateReport } from "@/lib/catalog-store";
+import { readAutoSelection, toProductWatch, writeUpdateReport } from "@/lib/catalog-store";
 import { PriceFetchError } from "@/lib/fetch-prices";
 import { describePriceChanges } from "@/lib/price-changes";
 import { runPriceUpdate } from "@/lib/run-update";
@@ -19,18 +19,19 @@ export async function GET(request: Request) {
     return Response.json({ error: "Tidak diizinkan." }, { status: 401 });
   }
 
-  const providers = await readAutoSelection();
-  if (providers.length === 0) {
+  const selection = await readAutoSelection();
+  const watch = toProductWatch(selection);
+  if (watch.size === 0) {
     return Response.json({
       ok: true,
       skipped: true,
-      reason: "Tidak ada operator yang dipilih untuk auto update.",
+      reason: "Tidak ada produk yang dipilih untuk auto update.",
     });
   }
 
   try {
-    const result = await runPriceUpdate({ providerCodes: providers });
-    const messages = describePriceChanges(result.previous, result.incoming);
+    const result = await runPriceUpdate({ providerCodes: [...watch.keys()], watch });
+    const messages = describePriceChanges(result.previous, result.incoming, watch);
     let telegram: "sent" | "skipped" | "unconfigured" = "skipped";
 
     if (messages.length === 0) {

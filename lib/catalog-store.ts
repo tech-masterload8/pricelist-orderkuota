@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
 import path from "path";
-import type { Catalog, CategoryCatalog, CatalogIndex, ProviderCatalog, UpdateReport } from "./types";
+import type { AutoSelection, Catalog, CategoryCatalog, CatalogIndex, ProductWatch, ProviderCatalog, UpdateReport } from "./types";
 
 const CATALOG_PATH = path.join(process.cwd(), "data", "catalog.json");
 const LOCK_PATH = path.join(process.cwd(), "data", "update-lock.json");
@@ -96,7 +96,11 @@ export async function readCatalog(): Promise<Catalog> {
   return memoryCatalog;
 }
 
-export function mergeCatalog(existing: Catalog | null, incoming: Catalog, options?: { mergeProviders?: boolean }): Catalog {
+export function mergeCatalog(
+  existing: Catalog | null,
+  incoming: Catalog,
+  options?: { mergeProviders?: boolean; watch?: ProductWatch },
+): Catalog {
   if (!existing) return recount(incoming);
 
   const incomingByCode = new Map(incoming.categories.map((category) => [category.code, category]));
@@ -105,7 +109,7 @@ export function mergeCatalog(existing: Catalog | null, incoming: Catalog, option
     const replacement = incomingByCode.get(category.code);
     if (!replacement) return category;
     replaced.add(category.code);
-    const merged = options?.mergeProviders ? mergeProviders(category, replacement) : replacement;
+    const merged = options?.mergeProviders ? mergeProviders(category, replacement, options.watch) : replacement;
     return preserveFailedProviders(category, merged);
   });
 
@@ -116,13 +120,15 @@ export function mergeCatalog(existing: Catalog | null, incoming: Catalog, option
   return recount({ ...incoming, categories });
 }
 
-function mergeProviders(existing: CategoryCatalog, incoming: CategoryCatalog): CategoryCatalog {
+function mergeProviders(existing: CategoryCatalog, incoming: CategoryCatalog, watch?: ProductWatch): CategoryCatalog {
   const incomingByCode = new Map(incoming.providers.map((provider) => [provider.code, provider]));
   const replaced = new Set<string>();
   const providers = existing.providers.map((provider) => {
     const replacement = incomingByCode.get(provider.code);
     if (!replacement) return provider;
     replaced.add(provider.code);
+    const rule = watch?.get(provider.code);
+    if (rule && rule !== "all") return applyProductWatch(provider, replacement, rule);
     return replacement;
   });
 
@@ -131,6 +137,24 @@ function mergeProviders(existing: CategoryCatalog, incoming: CategoryCatalog): C
   }
 
   return { ...incoming, providers };
+}
+
+function applyProductWatch(existing: ProviderCatalog, incoming: ProviderCatalog, ids: ReadonlySet<number>): ProviderCatalog {
+  if (incoming.error) return { ...existing, name: incoming.name || existing.name, error: incoming.error };
+  const incomingById = new Map(incoming.products.map((product) => [product.id, product]));
+  const seen = new Set<number>();
+  const products = existing.products.flatMap((product) => {
+    if (!ids.has(product.id)) return [product];
+    seen.add(product.id);
+    const next = incomingById.get(product.id);
+    return next ? [next] : [];
+  });
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    const next = incomingById.get(id);
+    if (next) products.push(next);
+  }
+  return { ...existing, name: incoming.name || existing.name, error: null, products };
 }
 
 function preserveFailedProviders(existing: CategoryCatalog, incoming: CategoryCatalog): CategoryCatalog {
@@ -331,7 +355,68 @@ export function limitReportDetails(details: string[], limit = 8) {
   return [...details.slice(0, limit), `dan ${details.length - limit} operator lain gagal.`];
 }
 
-export async function readAutoSelection(): Promise<string[]> {
+const EMPTY_AUTO_SELECTION: AutoSelection = { providers: [], products: [] };
+
+function parseAutoSelection(text: string): AutoSelection {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== "object") return EMPTY_AUTO_SELECTION;
+    const record = value as { providers?: unknown; products?: unknown };
+    const providers = Array.isArray(record.providers)
+      ? [...new Set(record.providers.filter((code): code is string => typeof code === "string" && PROVIDER_CODE.test(code)))]
+      : [];
+    const full = new Set(providers);
+    const products = Array.isArray(record.products)
+      ? record.products.flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const product = item as { providerCode?: unknown; productId?: unknown };
+          if (typeof product.providerCode !== "string" || !PROVIDER_CODE.test(product.providerCode)) return [];
+          if (typeof product.productId !== "number" || !Number.isInteger(product.productId) || product.productId <= 0) return [];
+          if (full.has(product.providerCode)) return [];
+          return [{ providerCode: product.providerCode, productId: product.productId }];
+        })
+      : [];
+    return { providers, products };
+  } catch {
+    return EMPTY_AUTO_SELECTION;
+  }
+}
+
+export function countSelectedProducts(catalog: Catalog, selection: AutoSelection) {
+  const full = new Set(selection.providers);
+  const known = new Set<string>();
+  let count = 0;
+  for (const category of catalog.categories) {
+    for (const provider of category.providers) {
+      known.add(provider.code);
+      if (full.has(provider.code)) count += provider.products.length;
+    }
+  }
+  const seen = new Set<string>();
+  for (const product of selection.products) {
+    if (!known.has(product.providerCode)) continue;
+    const key = `${product.providerCode}:${product.productId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    count += 1;
+  }
+  return count;
+}
+
+export function toProductWatch(selection: AutoSelection): ProductWatch {
+  const watch = new Map<string, "all" | Set<number>>();
+  for (const code of selection.providers) watch.set(code, "all");
+  for (const product of selection.products) {
+    const current = watch.get(product.providerCode);
+    if (current === "all") continue;
+    const ids = current ?? new Set<number>();
+    ids.add(product.productId);
+    watch.set(product.providerCode, ids);
+  }
+  return watch;
+}
+
+export async function readAutoSelection(): Promise<AutoSelection> {
   let text: string | null = null;
   if (blobConfigured()) {
     try {
@@ -345,22 +430,16 @@ export async function readAutoSelection(): Promise<string[]> {
     try {
       text = await readFile(AUTO_SELECTION_PATH, "utf8");
     } catch {
-      return [];
+      return EMPTY_AUTO_SELECTION;
     }
   }
 
-  try {
-    const value: unknown = JSON.parse(text);
-    if (!value || typeof value !== "object" || !("providers" in value) || !Array.isArray(value.providers)) return [];
-    return value.providers.filter((code): code is string => typeof code === "string" && PROVIDER_CODE.test(code));
-  } catch {
-    return [];
-  }
+  return parseAutoSelection(text);
 }
 
-export async function writeAutoSelection(providers: string[]) {
-  const unique = [...new Set(providers.filter((code) => PROVIDER_CODE.test(code)))];
-  const body = JSON.stringify({ providers: unique });
+export async function writeAutoSelection(selection: { providers?: unknown; products?: unknown }) {
+  const normalized = parseAutoSelection(JSON.stringify({ providers: selection.providers ?? [], products: selection.products ?? [] }));
+  const body = JSON.stringify(normalized);
   if (blobConfigured()) await writeBlobText(BLOB_AUTO_SELECTION_PATH, body);
   if (process.env.VERCEL) {
     if (!blobConfigured()) throw new Error("Penyimpanan belum terhubung, jadi pilihan auto update tidak disimpan.");

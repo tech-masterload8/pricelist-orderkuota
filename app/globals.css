@@ -420,6 +420,30 @@ tbody tr:hover { background: #f7fbf9; }
   list-style: none;
 }
 
+.operator-item.is-open > .choice {
+  border-color: #0f6e56;
+  background: #f6fbf9;
+}
+
+.operator-item:hover > .choice,
+.operator-item:focus-within > .choice {
+  border-color: #7dbaa8;
+  background: #f4fbf8;
+}
+
+.operator-item:hover .chevron,
+.operator-item.is-open .chevron {
+  color: #0f6e56;
+}
+
+.product-list {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 2px 28px;
+  padding: 0;
+  list-style: none;
+}
+
 .choice small {
   color: #5d6b80;
 }

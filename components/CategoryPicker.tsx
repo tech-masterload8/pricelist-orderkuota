@@ -26,7 +26,7 @@ function CategoryCheckbox({
   return <input ref={ref} id={id} type="checkbox" checked={checked} onChange={onChange} />;
 }
 
-export default function CategoryPicker({ mode = "manual" }: { mode?: "manual" | "auto" }) {
+export default function CategoryPicker() {
   const router = useRouter();
   const [index, setIndex] = useState<CatalogIndex | null>(null);
   const [status, setStatus] = useState<"loading" | "empty" | "ready" | "error">("loading");
@@ -51,24 +51,17 @@ export default function CategoryPicker({ mode = "manual" }: { mode?: "manual" | 
 
         const allProviders = data.categories.flatMap((category) => category.providers.map((provider) => provider.code));
         const available = new Set(allProviders);
-        let initial = mode === "auto" ? [] : allProviders;
-        if (mode === "auto") {
-          const response = await fetch("/api/auto-selection", { cache: "no-store" });
-          if (!response.ok) throw new Error("Pilihan auto update belum bisa dimuat.");
-          const saved = (await response.json()) as { providers?: string[] };
-          initial = (saved.providers ?? []).filter((code) => available.has(code));
-        } else {
-          const saved = readUpdateSelection();
-          if (saved && "providers" in saved) {
-            const kept = saved.providers.filter((code) => available.has(code));
-            initial = kept.length > 0 ? kept : allProviders;
-          } else if (saved && "categories" in saved) {
-            const categoryCodes = new Set(saved.categories);
-            initial = data.categories
-              .filter((category) => categoryCodes.has(category.code))
-              .flatMap((category) => category.providers.map((provider) => provider.code));
-            if (initial.length === 0) initial = allProviders;
-          }
+        const saved = readUpdateSelection();
+        let initial = allProviders;
+        if (saved && "providers" in saved) {
+          const kept = saved.providers.filter((code) => available.has(code));
+          initial = kept.length > 0 ? kept : allProviders;
+        } else if (saved && "categories" in saved) {
+          const categoryCodes = new Set(saved.categories);
+          initial = data.categories
+            .filter((category) => categoryCodes.has(category.code))
+            .flatMap((category) => category.providers.map((provider) => provider.code));
+          if (initial.length === 0) initial = allProviders;
         }
 
         setIndex(data);
@@ -86,7 +79,7 @@ export default function CategoryPicker({ mode = "manual" }: { mode?: "manual" | 
     return () => {
       cancelled = true;
     };
-  }, [mode]);
+  }, []);
 
   function toggleProvider(code: string) {
     setChecked((current) => {
@@ -126,28 +119,16 @@ export default function CategoryPicker({ mode = "manual" }: { mode?: "manual" | 
     });
   }
 
-  async function save() {
+  function save() {
     if (!index) return;
     const allProviders = index.categories.flatMap((category) => category.providers.map((provider) => provider.code));
     const selected = allProviders.filter((code) => checked.has(code));
-    if (mode === "manual" && selected.length === 0) {
+    if (selected.length === 0) {
       setSaveError("Pilih minimal satu operator.");
       return;
     }
 
-    if (mode === "auto") {
-      const response = await fetch("/api/auto-selection", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providers: selected }),
-      });
-      if (!response.ok) {
-        setSaveError("Pilihan auto update gagal disimpan.");
-        return;
-      }
-    } else {
-      writeUpdateSelection(selected.length === allProviders.length ? null : selected);
-    }
+    writeUpdateSelection(selected.length === allProviders.length ? null : selected);
     router.push("/");
   }
 
@@ -163,26 +144,19 @@ export default function CategoryPicker({ mode = "manual" }: { mode?: "manual" | 
     <main className="page">
       <header className="topbar">
         <div>
-          <p className="eyebrow">{mode === "auto" ? "Auto update" : "Pembaruan"}</p>
-          <h1>{mode === "auto" ? "Pilih Operator Auto Update" : "Pilih Kategori Produk"}</h1>
+          <p className="eyebrow">Pembaruan</p>
+          <h1>Pilih Kategori Produk</h1>
           <p className="meta">
-            {mode === "auto"
-              ? index
-                ? `${selectedProviders.toLocaleString("id-ID")} dari ${totalProviders.toLocaleString("id-ID")} operator diperiksa setiap 10 menit. Kosong berarti Orderkuota tidak dihubungi.`
-                : "Pilih operator yang diperiksa setiap 10 menit."
-              : index
-                ? `${selectedProviders.toLocaleString("id-ID")} dari ${totalProviders.toLocaleString("id-ID")} operator akan diambil saat Update Harga diklik.`
-                : "Pilih kategori dan operator yang ingin diperbarui."}
-            {mode === "auto" && selectedProviders > 40
-              ? " Pilihan ini cukup banyak untuk dijalankan setiap 10 menit."
-              : ""}
+            {index
+              ? `${selectedProviders.toLocaleString("id-ID")} dari ${totalProviders.toLocaleString("id-ID")} operator akan diambil saat Update Harga diklik.`
+              : "Pilih kategori dan operator yang ingin diperbarui."}
           </p>
         </div>
         <div className="top-actions">
           <Link className="pick-button" href="/">
             Kembali
           </Link>
-          <button className="update-button" type="button" onClick={() => void save()} disabled={status !== "ready"}>
+          <button className="update-button" type="button" onClick={save} disabled={status !== "ready"}>
             Simpan pilihan
           </button>
         </div>
