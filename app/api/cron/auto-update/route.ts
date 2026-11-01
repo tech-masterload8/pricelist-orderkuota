@@ -78,7 +78,7 @@ export async function GET(request: Request) {
     if (telegramConfigured()) {
       try {
         const notice = ["Pembaruan otomatis gagal.", message, ...details].join("\n");
-        await sendTelegramMessages([notice]);
+        await sendTelegramMessages([notice], { html: false });
       } catch (notifyError) {
         console.error("Gagal memberi tahu Telegram.", notifyError);
       }
