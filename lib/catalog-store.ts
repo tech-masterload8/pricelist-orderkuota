@@ -6,10 +6,12 @@ const CATALOG_PATH = path.join(process.cwd(), "data", "catalog.json");
 const LOCK_PATH = path.join(process.cwd(), "data", "update-lock.json");
 const REPORT_PATH = path.join(process.cwd(), "data", "update-report.json");
 const AUTO_SELECTION_PATH = path.join(process.cwd(), "data", "auto-selection.json");
+const PRODUCT_CODES_PATH = path.join(process.cwd(), "data", "product-codes.json");
 const BLOB_PATH = "catalog/catalog.json";
 const BLOB_LOCK_PATH = "catalog/update-lock.json";
 const BLOB_REPORT_PATH = "catalog/update-report.json";
 const BLOB_AUTO_SELECTION_PATH = "catalog/auto-selection.json";
+const BLOB_PRODUCT_CODES_PATH = "catalog/product-codes.json";
 const PROVIDER_CODE = /^prv_[a-z0-9]+$/i;
 const STALE_RUNNING_MS = 7 * 60 * 1000;
 const LOCK_TTL_MS = 20 * 60 * 1000;
@@ -448,6 +450,60 @@ export async function writeAutoSelection(selection: { providers?: unknown; produ
 
   await mkdir(path.dirname(AUTO_SELECTION_PATH), { recursive: true });
   await writeFile(AUTO_SELECTION_PATH, body);
+}
+
+function sanitizeProductCodes(value: unknown) {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const codes = new Map<number, string>();
+  for (const [key, raw] of Object.entries(source)) {
+    if (!/^[1-9]\d*$/.test(key) || typeof raw !== "string") continue;
+    const code = raw.trim().replace(/[\u0000-\u001F\u007F]/g, "");
+    if (!code || code.length > 80) continue;
+    codes.set(Number(key), code);
+  }
+  return codes;
+}
+
+async function readProductCodeText() {
+  if (blobConfigured()) {
+    try {
+      const text = await readBlobText(BLOB_PRODUCT_CODES_PATH);
+      if (text) return text;
+    } catch (error) {
+      console.error("Gagal membaca kode Masterload8.", error);
+    }
+  }
+
+  try {
+    return await readFile(PRODUCT_CODES_PATH, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+export async function readProductCodes() {
+  const text = await readProductCodeText();
+  if (!text) return new Map<number, string>();
+  try {
+    const value: unknown = JSON.parse(text);
+    const record = value && typeof value === "object" && "codes" in value ? value.codes : {};
+    return sanitizeProductCodes(record);
+  } catch {
+    return new Map<number, string>();
+  }
+}
+
+export async function writeProductCodes(codes: unknown) {
+  const normalized = sanitizeProductCodes(codes);
+  const body = JSON.stringify({ codes: Object.fromEntries(normalized) });
+  if (blobConfigured()) await writeBlobText(BLOB_PRODUCT_CODES_PATH, body);
+  if (process.env.VERCEL) {
+    if (!blobConfigured()) throw new Error("Penyimpanan belum terhubung, jadi kode Masterload8 tidak disimpan.");
+    return;
+  }
+
+  await mkdir(path.dirname(PRODUCT_CODES_PATH), { recursive: true });
+  await writeFile(PRODUCT_CODES_PATH, body);
 }
 
 export async function releaseUpdateLock() {

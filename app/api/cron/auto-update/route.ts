@@ -1,4 +1,4 @@
-import { readAutoSelection, toProductWatch, writeUpdateReport } from "@/lib/catalog-store";
+import { readAutoSelection, readProductCodes, toProductWatch, writeUpdateReport } from "@/lib/catalog-store";
 import { PriceFetchError } from "@/lib/fetch-prices";
 import { describePriceChanges } from "@/lib/price-changes";
 import { runPriceUpdate } from "@/lib/run-update";
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
 
   try {
     const result = await runPriceUpdate({ providerCodes: [...watch.keys()], watch });
-    const messages = describePriceChanges(result.previous, result.incoming, watch);
+    const messages = describePriceChanges(result.previous, result.incoming, watch, await readProductCodes());
     let telegram: "sent" | "skipped" | "unconfigured" = "skipped";
 
     if (messages.length === 0) {

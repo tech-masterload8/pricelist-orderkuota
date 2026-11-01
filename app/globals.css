@@ -444,6 +444,58 @@ tbody tr:hover { background: #f7fbf9; }
   list-style: none;
 }
 
+.code-search {
+  margin: 6px 0 8px 28px;
+}
+
+.code-search input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #c9d4e2;
+  border-radius: 12px;
+  padding: 0 12px;
+  background: white;
+}
+
+.code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 280px);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #e7edf3;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: white;
+}
+
+.code-row label {
+  display: grid;
+  gap: 4px;
+  color: #5d6b80;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.code-row small {
+  display: block;
+  color: #5d6b80;
+  font-weight: 400;
+}
+
+.code-row input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #c9d4e2;
+  border-radius: 10px;
+  padding: 0 10px;
+  color: #172033;
+  font-weight: 600;
+}
+
+@media (max-width: 860px) {
+  .code-row { grid-template-columns: 1fr; }
+}
+
 .choice small {
   color: #5d6b80;
 }

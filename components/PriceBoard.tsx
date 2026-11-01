@@ -315,6 +315,9 @@ export default function PriceBoard() {
           </p>
         </div>
         <div className="top-actions">
+          <Link className="pick-button" href="/kode">
+            Kode Produk ML8
+          </Link>
           <Link className="pick-button" href="/auto">
             Auto Update
           </Link>

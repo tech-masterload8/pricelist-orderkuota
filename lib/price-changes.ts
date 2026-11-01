@@ -62,7 +62,12 @@ function productLine(change: Change) {
   return `${arrow} ${escapeHtml(change.code)} / ${formatDelta(change.delta)} » Rp ${escapeHtml(change.price)}`;
 }
 
-export function describePriceChanges(previous: Catalog | null, incoming: Catalog, watch?: ProductWatch) {
+export function describePriceChanges(
+  previous: Catalog | null,
+  incoming: Catalog,
+  watch?: ProductWatch,
+  masterCodes?: ReadonlyMap<number, string>,
+) {
   const grouped = new Map<string, { up: Change[]; down: Change[] }>();
 
   for (const category of incoming.categories) {
@@ -79,7 +84,7 @@ export function describePriceChanges(previous: Catalog | null, incoming: Catalog
 
       for (const product of provider.products) {
         if (!include(product.id)) continue;
-        const change = resellerChange(product, priorProducts.get(product.id), provider.name);
+        const change = resellerChange(product, priorProducts.get(product.id), provider.name, masterCodes?.get(product.id));
         if (!change) continue;
         const entry = grouped.get(bucket) ?? { up: [], down: [] };
         if (change.delta > 0) entry.up.push(change);
@@ -96,14 +101,15 @@ export function describePriceChanges(previous: Catalog | null, incoming: Catalog
   });
 }
 
-function resellerChange(product: Product, previous: Product | undefined, providerName: string): Change | null {
+function resellerChange(product: Product, previous: Product | undefined, providerName: string, masterCode?: string): Change | null {
   if (!previous) return null;
   const oldAmount = parsePrice(previous.resellerPrice);
   const newAmount = parsePrice(product.resellerPrice);
   if (oldAmount === null || newAmount === null || oldAmount === newAmount) return null;
+  const code = masterCode?.trim() || product.code;
   return {
     providerName,
-    code: product.code,
+    code,
     delta: newAmount - oldAmount,
     price: product.resellerPrice,
   };
