@@ -58,7 +58,8 @@ function formatDelta(amount: number) {
 }
 
 function productLine(change: Change) {
-  return `${escapeHtml(change.code)} / ${formatDelta(change.delta)} » Rp ${escapeHtml(change.price)}`;
+  const arrow = change.delta > 0 ? "⬆️" : "⬇️";
+  return `${arrow} ${escapeHtml(change.code)} / ${formatDelta(change.delta)} » Rp ${escapeHtml(change.price)}`;
 }
 
 export function describePriceChanges(previous: Catalog | null, incoming: Catalog, watch?: ProductWatch) {
@@ -109,7 +110,11 @@ function resellerChange(product: Product, previous: Product | undefined, provide
 }
 
 function renderOperator(operator: string, up: Change[], down: Change[]) {
-  const parts = [...sectionParts("Harga Naik:", up), ...sectionParts("Harga Turun:", down)];
+  const parts = [
+    ...sectionParts("⬆️ <b>HARGA NAIK</b> ⬆️", up),
+    ...(up.length > 0 && down.length > 0 ? ["────────────"] : []),
+    ...sectionParts("⬇️ <b>HARGA TURUN</b> ⬇️", down),
+  ];
   const messages: string[] = [];
   let body = "";
   let page = 0;
@@ -134,7 +139,7 @@ function title(operator: string, page: number) {
   return `<b>Daftar Perubahan Harga Produk ${escapeHtml(operator)}${suffix}:</b>`;
 }
 
-function sectionParts(label: string, changes: Change[]) {
+function sectionParts(headingHtml: string, changes: Change[]) {
   if (changes.length === 0) return [];
   const byProvider = new Map<string, Change[]>();
   for (const change of changes) {
@@ -144,7 +149,7 @@ function sectionParts(label: string, changes: Change[]) {
   }
 
   const parts: string[] = [];
-  let labelUsed = false;
+  let headingUsed = false;
   for (const [providerName, providerChanges] of byProvider) {
     const lines = [...providerChanges]
       .sort((left, right) => left.code.localeCompare(right.code, "id"))
@@ -152,14 +157,14 @@ function sectionParts(label: string, changes: Change[]) {
     let chunk: string[] = [];
     const flush = () => {
       if (chunk.length === 0) return;
-      const heading = labelUsed ? "" : `<b>${label}</b>\n`;
-      labelUsed = true;
+      const heading = headingUsed ? "" : `${headingHtml}\n`;
+      headingUsed = true;
       parts.push(`${heading}<b>${escapeHtml(providerName)}</b>\n${chunk.join("\n")}`);
       chunk = [];
     };
 
     for (const line of lines) {
-      const heading = `<b>${label}</b>\n<b>${escapeHtml(providerName)}</b>\n`;
+      const heading = `${headingHtml}\n<b>${escapeHtml(providerName)}</b>\n`;
       if (heading.length + [...chunk, line].join("\n").length > MESSAGE_LIMIT - 180 && chunk.length > 0) flush();
       chunk.push(line);
     }
