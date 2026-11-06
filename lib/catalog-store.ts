@@ -7,11 +7,14 @@ const LOCK_PATH = path.join(process.cwd(), "data", "update-lock.json");
 const REPORT_PATH = path.join(process.cwd(), "data", "update-report.json");
 const AUTO_SELECTION_PATH = path.join(process.cwd(), "data", "auto-selection.json");
 const PRODUCT_CODES_PATH = path.join(process.cwd(), "data", "product-codes.json");
+const PRODUCT_CODE_LOCK_PATH = path.join(process.cwd(), "data", "product-codes-lock.json");
 const BLOB_PATH = "catalog/catalog.json";
 const BLOB_LOCK_PATH = "catalog/update-lock.json";
 const BLOB_REPORT_PATH = "catalog/update-report.json";
 const BLOB_AUTO_SELECTION_PATH = "catalog/auto-selection.json";
 const BLOB_PRODUCT_CODES_PATH = "catalog/product-codes.json";
+const BLOB_PRODUCT_CODE_LOCK_PATH = "catalog/product-codes-lock.json";
+const PRODUCT_CODE_LOCK_TTL_MS = 20_000;
 const PROVIDER_CODE = /^prv_[a-z0-9]+$/i;
 const STALE_RUNNING_MS = 7 * 60 * 1000;
 const LOCK_TTL_MS = 20 * 60 * 1000;
@@ -504,6 +507,92 @@ export async function writeProductCodes(codes: unknown) {
 
   await mkdir(path.dirname(PRODUCT_CODES_PATH), { recursive: true });
   await writeFile(PRODUCT_CODES_PATH, body);
+}
+
+function sanitizeDeletedProductIds(value: unknown) {
+  if (!Array.isArray(value)) return new Set<number>();
+  const ids = new Set<number>();
+  for (const item of value) {
+    const key = typeof item === "number" || typeof item === "string" ? String(item) : "";
+    if (/^[1-9]\d*$/.test(key)) ids.add(Number(key));
+  }
+  return ids;
+}
+
+async function readProductCodeLock() {
+  if (blobConfigured()) {
+    try {
+      const text = await readBlobText(BLOB_PRODUCT_CODE_LOCK_PATH);
+      if (text) return JSON.parse(text) as { startedAt: string };
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    return JSON.parse(await readFile(PRODUCT_CODE_LOCK_PATH, "utf8")) as { startedAt: string };
+  } catch {
+    return null;
+  }
+}
+
+async function writeProductCodeLock(lock: { startedAt: string } | null) {
+  if (blobConfigured()) {
+    if (lock) await writeBlobText(BLOB_PRODUCT_CODE_LOCK_PATH, JSON.stringify(lock));
+    else {
+      try {
+        const { del } = await import("@vercel/blob");
+        await del(BLOB_PRODUCT_CODE_LOCK_PATH);
+      } catch {
+        // A missing lock is already unlocked.
+      }
+    }
+  }
+
+  if (process.env.VERCEL) return;
+
+  if (!lock) {
+    await rm(PRODUCT_CODE_LOCK_PATH, { force: true });
+    return;
+  }
+  await mkdir(path.dirname(PRODUCT_CODE_LOCK_PATH), { recursive: true });
+  await writeFile(PRODUCT_CODE_LOCK_PATH, JSON.stringify(lock));
+}
+
+async function withProductCodeWriteLock<T>(action: () => Promise<T>) {
+  const deadline = Date.now() + 15_000;
+  let held = false;
+  while (Date.now() < deadline) {
+    const existing = await readProductCodeLock();
+    const age = existing ? Date.now() - Date.parse(existing.startedAt) : PRODUCT_CODE_LOCK_TTL_MS;
+    if (!existing || !Number.isFinite(age) || age >= PRODUCT_CODE_LOCK_TTL_MS) {
+      await writeProductCodeLock({ startedAt: new Date().toISOString() });
+      held = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  if (!held) throw new Error("Simpanan lain sedang ditulis. Tunggu sebentar, lalu simpan lagi.");
+
+  try {
+    return await action();
+  } finally {
+    await writeProductCodeLock(null);
+  }
+}
+
+export async function patchProductCodes(updates: unknown, deleted: unknown) {
+  const nextUpdates = sanitizeProductCodes(updates);
+  const nextDeleted = sanitizeDeletedProductIds(deleted);
+  return withProductCodeWriteLock(async () => {
+    const current = await readProductCodes();
+    for (const [id, code] of nextUpdates) current.set(id, code);
+    for (const id of nextDeleted) {
+      if (!nextUpdates.has(id)) current.delete(id);
+    }
+    if (nextUpdates.size > 0 || nextDeleted.size > 0) await writeProductCodes(Object.fromEntries(current));
+    return current;
+  });
 }
 
 export async function releaseUpdateLock() {

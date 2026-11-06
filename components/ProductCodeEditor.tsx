@@ -22,7 +22,9 @@ export default function ProductCodeEditor() {
   const [index, setIndex] = useState<CatalogIndex | null>(null);
   const [status, setStatus] = useState<"loading" | "empty" | "ready" | "error">("loading");
   const [pageError, setPageError] = useState<string | null>(null);
-  const [codes, setCodes] = useState<Record<string, string>>({});
+  const [baseline, setBaseline] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [deleted, setDeleted] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [openProviders, setOpenProviders] = useState<Set<string>>(new Set());
   const [loaded, setLoaded] = useState<Map<string, LoadedProducts>>(new Map());
@@ -50,7 +52,9 @@ export default function ProductCodeEditor() {
         const saved = (await codeResponse.json()) as { codes?: Record<string, string> };
         if (cancelled) return;
         setIndex(data);
-        setCodes(saved.codes ?? {});
+        setBaseline(saved.codes ?? {});
+        setDrafts({});
+        setDeleted(new Set());
         setStatus("ready");
       } catch (error) {
         if (!cancelled) {
@@ -101,11 +105,27 @@ export default function ProductCodeEditor() {
     }
   }
 
+  function fieldValue(productId: number) {
+    const key = String(productId);
+    if (deleted.has(key)) return "";
+    if (Object.prototype.hasOwnProperty.call(drafts, key)) return drafts[key];
+    return baseline[key] ?? "";
+  }
+
   function updateCode(productId: number, value: string) {
-    setCodes((current) => {
+    const key = String(productId);
+    const saved = (baseline[key] ?? "").trim();
+    const trimmed = value.trim();
+    setDeleted((current) => {
+      const next = new Set(current);
+      if (trimmed === "" && saved) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+    setDrafts((current) => {
       const next = { ...current };
-      if (value.trim() === "") delete next[String(productId)];
-      else next[String(productId)] = value;
+      if (trimmed === "" || trimmed === saved) delete next[key];
+      else next[key] = value;
       return next;
     });
     setSavedNote(null);
@@ -113,23 +133,28 @@ export default function ProductCodeEditor() {
   }
 
   async function save() {
-    const payload = Object.fromEntries(
-      Object.entries(codes)
+    const updates = Object.fromEntries(
+      Object.entries(drafts)
         .map(([id, code]) => [id, code.trim()] as const)
         .filter(([, code]) => code.length > 0),
     );
+    const removed = [...deleted].map((id) => Number(id));
+    if (Object.keys(updates).length === 0 && removed.length === 0) return;
+
     setSaving(true);
     setSaveError(null);
     try {
       const response = await fetch("/api/product-codes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codes: payload }),
+        body: JSON.stringify({ updates, deleted: removed }),
       });
-      if (!response.ok) throw new Error("Kode Masterload8 gagal disimpan.");
-      const saved = (await response.json()) as { codes?: Record<string, string> };
-      setCodes(saved.codes ?? {});
-      setSavedNote("Kode Masterload8 tersimpan.");
+      const saved = (await response.json()) as { codes?: Record<string, string>; error?: string };
+      if (!response.ok) throw new Error(saved.error || "Kode Masterload8 gagal disimpan.");
+      setBaseline(saved.codes ?? {});
+      setDrafts({});
+      setDeleted(new Set());
+      setSavedNote("Perubahan kode Masterload8 tersimpan. Kode yang tidak diubah tetap ada.");
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Kode Masterload8 gagal disimpan.");
     } finally {
@@ -137,7 +162,8 @@ export default function ProductCodeEditor() {
     }
   }
 
-  const filledCount = Object.values(codes).filter((code) => code.trim()).length;
+  const filledCount = Object.keys({ ...baseline, ...drafts }).filter((id) => fieldValue(Number(id)).trim()).length;
+  const changeCount = Object.keys(drafts).length + deleted.size;
 
   return (
     <main className="page">
@@ -147,7 +173,7 @@ export default function ProductCodeEditor() {
           <h1>Kode Produk ML8</h1>
           <p className="meta">
             {index
-              ? `${filledCount.toLocaleString("id-ID")} kode Masterload8 terisi. Field kosong memakai kode Orderkuota pada pesan Telegram.`
+              ? `${filledCount.toLocaleString("id-ID")} kode Masterload8 terisi. Simpan hanya mengirim kode yang diisi atau dihapus di halaman ini.`
               : "Isi kode Masterload8 untuk mengganti kode produk di pesan Telegram."}
           </p>
         </div>
@@ -155,8 +181,8 @@ export default function ProductCodeEditor() {
           <Link className="pick-button" href="/">
             Kembali
           </Link>
-          <button className="update-button" type="button" onClick={() => void save()} disabled={status !== "ready" || saving}>
-            {saving ? "Menyimpan…" : "Simpan kode"}
+          <button className="update-button" type="button" onClick={() => void save()} disabled={status !== "ready" || saving || changeCount === 0}>
+            {saving ? "Menyimpan…" : changeCount > 0 ? `Simpan ${changeCount.toLocaleString("id-ID")} perubahan` : "Simpan kode"}
           </button>
         </div>
       </header>
@@ -203,7 +229,7 @@ export default function ProductCodeEditor() {
                           if (!query) return true;
                           return `${product.code} ${product.name}`.toLowerCase().includes(query);
                         });
-                        const filledHere = (providerProducts?.products ?? []).filter((product) => codes[String(product.id)]?.trim()).length;
+                        const filledHere = (providerProducts?.products ?? []).filter((product) => fieldValue(product.id).trim()).length;
                         return (
                           <li key={provider.code} className={providerOpen ? "operator-item is-open" : "operator-item"}>
                             <div className="choice">
@@ -245,6 +271,7 @@ export default function ProductCodeEditor() {
                                     <ul className="product-list">
                                       {visible.map((product) => {
                                         const fieldId = `ml8-${provider.code}-${product.id}`;
+                                        const markedDeleted = deleted.has(String(product.id));
                                         return (
                                           <li key={product.id} className="code-row">
                                             <span>
@@ -261,10 +288,12 @@ export default function ProductCodeEditor() {
                                                 id={fieldId}
                                                 type="text"
                                                 maxLength={80}
-                                                value={codes[String(product.id)] ?? ""}
-                                                placeholder={product.code}
+                                                value={fieldValue(product.id)}
+                                                placeholder="Kosong = kode Orderkuota"
+                                                readOnly={saving}
                                                 onChange={(event) => updateCode(product.id, event.target.value)}
                                               />
+                                              {markedDeleted ? <small className="code-remove">Akan dihapus saat disimpan.</small> : null}
                                             </label>
                                           </li>
                                         );

@@ -482,6 +482,11 @@ tbody tr:hover { background: #f7fbf9; }
   font-weight: 400;
 }
 
+.code-remove {
+  color: #9a3412;
+  font-weight: 700;
+}
+
 .code-row input {
   width: 100%;
   min-height: 40px;
