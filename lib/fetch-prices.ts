@@ -44,6 +44,26 @@ function unexpectedResponse(pathname: string, body: Record<string, unknown>, exp
   throw new PriceFetchError(`Endpoint Orderkuota berubah (${pathname}): ${expected}.${remoteMessage(body)}`);
 }
 
+function failureCause(error: unknown) {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const record = current as { code?: unknown; message?: unknown; cause?: unknown; errors?: unknown };
+    if (typeof record.code === "string") parts.push(record.code);
+    if (typeof record.message === "string" && record.message !== "fetch failed") parts.push(record.message);
+    current = Array.isArray(record.errors) ? record.errors[0] : record.cause;
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
+function unreachable(pathname: string, error: unknown) {
+  const cause = failureCause(error);
+  const suffix = cause ? ` Penyebab: ${cause}.` : "";
+  return new Error(`Orderkuota tidak bisa dihubungi pada ${pathname}.${suffix} Katalog lama tetap dipakai.`);
+}
+
 function formatPrice(price: PricePayload | undefined) {
   if (typeof price?.formatted === "string" && price.formatted.trim()) {
     return price.formatted.trim();
@@ -94,10 +114,11 @@ async function getJson(pathname: string, attempt = 0): Promise<Record<string, un
     if (timedOut) {
       throw new Error(`Orderkuota tidak menjawab dalam 25 detik pada ${pathname}`);
     }
-    if (attempt < 3 && !message.startsWith("Permintaan ke Orderkuota") && !message.startsWith("Endpoint Orderkuota")) {
+    if (attempt < 3 && !message.startsWith("Permintaan ke Orderkuota") && !message.startsWith("Endpoint Orderkuota") && !message.startsWith("Orderkuota tidak bisa dihubungi")) {
       await sleep(500 * 2 ** attempt);
       return getJson(pathname, attempt + 1);
     }
+    if (message === "fetch failed" || error instanceof TypeError) throw unreachable(pathname, error);
     throw error;
   }
 }
