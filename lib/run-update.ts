@@ -54,12 +54,10 @@ export async function runPriceUpdate(input: {
 
     const partial = Boolean(categoryCodes?.length || providerCodes?.length);
     let previous: Catalog | null = null;
-    if (partial) {
-      try {
-        previous = await readCatalog();
-      } catch {
-        throw new Error("Katalog lama tidak bisa dibaca, jadi pembaruan sebagian dibatalkan.");
-      }
+    try {
+      previous = await readCatalog();
+    } catch {
+      if (partial) throw new Error("Katalog lama tidak bisa dibaca, jadi pembaruan sebagian dibatalkan.");
     }
 
     if (providerCodes) {
@@ -76,6 +74,7 @@ export async function runPriceUpdate(input: {
     const incoming = await fetchFullCatalog({
       categoryCodes,
       providerCodes,
+      previous,
       onProgress: input.onProgress,
     });
     const catalog = partial
