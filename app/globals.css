@@ -444,6 +444,19 @@ tbody tr:hover { background: #f7fbf9; }
   list-style: none;
 }
 
+.product-info {
+  display: grid;
+  gap: 2px;
+  border: 1px solid #e7edf3;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+}
+
+.product-info small {
+  color: #526277;
+}
+
 .code-search {
   margin: 6px 0 8px 28px;
 }

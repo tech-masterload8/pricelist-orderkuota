@@ -7,7 +7,6 @@ import type { AutoSelection, CatalogIndex, Product } from "@/lib/types";
 
 type Checks = {
   full: Set<string>;
-  partial: Map<string, Set<number>>;
 };
 
 type LoadedProducts = {
@@ -44,17 +43,8 @@ function Chevron() {
   );
 }
 
-function selectedProductCount(checks: Checks, code: string, productCount: number) {
-  if (checks.full.has(code)) return productCount;
-  return checks.partial.get(code)?.size ?? 0;
-}
-
-function providerState(checks: Checks, code: string, productCount: number) {
-  if (checks.full.has(code)) return "all" as const;
-  const picked = checks.partial.get(code)?.size ?? 0;
-  if (picked === 0) return "none" as const;
-  if (productCount > 0 && picked >= productCount) return "all" as const;
-  return "some" as const;
+function providerState(checks: Checks, code: string) {
+  return checks.full.has(code) ? "all" as const : "none" as const;
 }
 
 export default function AutoUpdatePicker() {
@@ -62,7 +52,7 @@ export default function AutoUpdatePicker() {
   const [index, setIndex] = useState<CatalogIndex | null>(null);
   const [status, setStatus] = useState<"loading" | "empty" | "ready" | "error">("loading");
   const [pageError, setPageError] = useState<string | null>(null);
-  const [checks, setChecks] = useState<Checks>({ full: new Set(), partial: new Map() });
+  const [checks, setChecks] = useState<Checks>({ full: new Set() });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [openProviders, setOpenProviders] = useState<Set<string>>(new Set());
   const [loaded, setLoaded] = useState<Map<string, LoadedProducts>>(new Map());
@@ -88,18 +78,12 @@ export default function AutoUpdatePicker() {
         if (cancelled) return;
 
         const available = new Set(data.categories.flatMap((category) => category.providers.map((provider) => provider.code)));
-        const partial = new Map<string, Set<number>>();
+        const full = new Set((saved.providers ?? []).filter((code) => available.has(code)));
         for (const product of saved.products ?? []) {
-          if (!available.has(product.providerCode)) continue;
-          const ids = partial.get(product.providerCode) ?? new Set<number>();
-          ids.add(product.productId);
-          partial.set(product.providerCode, ids);
+          if (available.has(product.providerCode)) full.add(product.providerCode);
         }
         setIndex(data);
-        setChecks({
-          full: new Set((saved.providers ?? []).filter((code) => available.has(code))),
-          partial,
-        });
+        setChecks({ full });
         setStatus("ready");
       } catch (error) {
         if (!cancelled) {
@@ -122,44 +106,21 @@ export default function AutoUpdatePicker() {
   function toggleCategory(codes: string[], selectAll: boolean) {
     setChecks((current) => {
       const full = new Set(current.full);
-      const partial = new Map(current.partial);
       for (const code of codes) {
-        partial.delete(code);
         if (selectAll) full.add(code);
         else full.delete(code);
       }
-      return { full, partial };
+      return { full };
     });
     clearSaveError();
   }
 
-  function toggleProvider(code: string, productCount: number) {
+  function toggleProvider(code: string) {
     setChecks((current) => {
       const full = new Set(current.full);
-      const partial = new Map(current.partial);
-      const state = providerState(current, code, productCount);
-      partial.delete(code);
-      if (state === "all") full.delete(code);
+      if (full.has(code)) full.delete(code);
       else full.add(code);
-      return { full, partial };
-    });
-    clearSaveError();
-  }
-
-  function toggleProduct(code: string, productId: number, products: Product[]) {
-    setChecks((current) => {
-      const full = new Set(current.full);
-      const partial = new Map(current.partial);
-      const ids = new Set(full.has(code) ? products.map((product) => product.id) : (partial.get(code) ?? []));
-      if (ids.has(productId)) ids.delete(productId);
-      else ids.add(productId);
-      full.delete(code);
-      if (ids.size === 0) partial.delete(code);
-      else if (products.length > 0 && ids.size === products.length) {
-        partial.delete(code);
-        full.add(code);
-      } else partial.set(code, ids);
-      return { full, partial };
+      return { full };
     });
     clearSaveError();
   }
@@ -167,7 +128,7 @@ export default function AutoUpdatePicker() {
   function setAll(selected: boolean) {
     if (!index) return;
     const codes = index.categories.flatMap((category) => category.providers.map((provider) => provider.code));
-    setChecks(selected ? { full: new Set(codes), partial: new Map() } : { full: new Set(), partial: new Map() });
+    setChecks(selected ? { full: new Set(codes) } : { full: new Set() });
     clearSaveError();
   }
 
@@ -210,14 +171,10 @@ export default function AutoUpdatePicker() {
 
   async function save() {
     if (!index) return;
-    const providers = [...checks.full];
-    const products = [...checks.partial.entries()].flatMap(([providerCode, ids]) =>
-      checks.full.has(providerCode) ? [] : [...ids].map((productId) => ({ providerCode, productId })),
-    );
     const response = await fetch("/api/auto-selection", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ providers, products }),
+      body: JSON.stringify({ providers: [...checks.full], products: [] }),
     });
     if (!response.ok) {
       setSaveError("Pilihan auto update gagal disimpan.");
@@ -226,17 +183,9 @@ export default function AutoUpdatePicker() {
     router.push("/");
   }
 
-  const selectedProducts = index
-    ? index.categories.reduce(
-        (sum, category) =>
-          sum + category.providers.reduce((inner, provider) => inner + selectedProductCount(checks, provider.code, provider.productCount), 0),
-        0,
-      )
-    : 0;
   const watchedOperators = index
     ? index.categories.reduce(
-        (sum, category) =>
-          sum + category.providers.filter((provider) => providerState(checks, provider.code, provider.productCount) !== "none").length,
+        (sum, category) => sum + category.providers.filter((provider) => checks.full.has(provider.code)).length,
         0,
       )
     : 0;
@@ -249,8 +198,8 @@ export default function AutoUpdatePicker() {
           <h1>Pilih Produk Auto Update</h1>
           <p className="meta">
             {index
-              ? `${selectedProducts.toLocaleString("id-ID")} produk dari ${watchedOperators.toLocaleString("id-ID")} operator diperiksa setiap 10 menit. Buka operator untuk memilih produk. Kosong berarti Orderkuota tidak dihubungi.`
-              : "Pilih produk yang diperiksa setiap 10 menit."}
+              ? `${watchedOperators.toLocaleString("id-ID")} operator dipilih. Kode baru pada operator itu ikut masuk otomatis. Buka operator untuk melihat daftar produk.`
+              : "Pilih operator yang diperiksa setiap pembaruan."}
             {watchedOperators > 40 ? " Pilihan ini cukup banyak untuk dijalankan setiap 10 menit." : ""}
           </p>
         </div>
@@ -286,11 +235,6 @@ export default function AutoUpdatePicker() {
           <ul className="choice-list">
             {index.categories.map((category) => {
               const providerCodes = category.providers.map((provider) => provider.code);
-              const categoryProducts = category.providers.reduce((sum, provider) => sum + provider.productCount, 0);
-              const categorySelected = category.providers.reduce(
-                (sum, provider) => sum + selectedProductCount(checks, provider.code, provider.productCount),
-                0,
-              );
               const fullOperators = category.providers.filter((provider) => checks.full.has(provider.code)).length;
               const open = expanded.has(category.code);
               return (
@@ -299,7 +243,7 @@ export default function AutoUpdatePicker() {
                     <ChoiceBox
                       id={`category-${category.code}`}
                       checked={fullOperators === providerCodes.length && providerCodes.length > 0}
-                      indeterminate={categorySelected > 0 && fullOperators < providerCodes.length}
+                      indeterminate={fullOperators > 0 && fullOperators < providerCodes.length}
                       onChange={() => toggleCategory(providerCodes, fullOperators !== providerCodes.length)}
                     />
                     <button
@@ -312,7 +256,7 @@ export default function AutoUpdatePicker() {
                       <span>
                         <strong>{category.name}</strong>
                         <small>
-                          {categorySelected.toLocaleString("id-ID")} dari {categoryProducts.toLocaleString("id-ID")} produk
+                          {fullOperators.toLocaleString("id-ID")} dari {providerCodes.length.toLocaleString("id-ID")} operator
                         </small>
                       </span>
                       <Chevron />
@@ -324,16 +268,15 @@ export default function AutoUpdatePicker() {
                       {category.providers.map((provider) => {
                         const providerOpen = openProviders.has(provider.code);
                         const providerProducts = loaded.get(provider.code);
-                        const state = providerState(checks, provider.code, provider.productCount);
-                        const picked = selectedProductCount(checks, provider.code, provider.productCount);
+                        const state = providerState(checks, provider.code);
                         return (
                           <li key={provider.code} className={providerOpen ? "operator-item is-open" : "operator-item"}>
                             <div className="choice">
                               <ChoiceBox
                                 id={`provider-${provider.code}`}
                                 checked={state === "all"}
-                                indeterminate={state === "some"}
-                                onChange={() => toggleProvider(provider.code, provider.productCount)}
+                                indeterminate={false}
+                                onChange={() => toggleProvider(provider.code)}
                               />
                               <button
                                 className="choice-expand"
@@ -345,7 +288,7 @@ export default function AutoUpdatePicker() {
                                 <span>
                                   <strong>{provider.name}</strong>
                                   <small>
-                                    {picked.toLocaleString("id-ID")} dari {provider.productCount.toLocaleString("id-ID")} produk
+                                    {provider.productCount.toLocaleString("id-ID")} produk saat ini. Kode baru ikut masuk.
                                   </small>
                                 </span>
                                 <Chevron />
@@ -359,31 +302,16 @@ export default function AutoUpdatePicker() {
                                   <li className="empty">Produk belum tersedia.</li>
                                 ) : null}
                                 {providerProducts?.status === "ready"
-                                  ? providerProducts.products.map((product) => {
-                                      const productId = `product-${provider.code}-${product.id}`;
-                                      const checked =
-                                        checks.full.has(provider.code) || (checks.partial.get(provider.code)?.has(product.id) ?? false);
-                                      return (
-                                        <li key={product.id}>
-                                          <label className="choice" htmlFor={productId}>
-                                            <input
-                                              id={productId}
-                                              type="checkbox"
-                                              checked={checked}
-                                              onChange={() => toggleProduct(provider.code, product.id, providerProducts.products)}
-                                            />
-                                            <span>
-                                              <strong>
-                                                {product.code} · {product.name}
-                                              </strong>
-                                              <small>
-                                                Reseller {product.resellerPrice} · Umum {product.publicPrice}
-                                              </small>
-                                            </span>
-                                          </label>
-                                        </li>
-                                      );
-                                    })
+                                  ? providerProducts.products.map((product) => (
+                                      <li key={product.id} className="product-info">
+                                        <strong>
+                                          {product.code} · {product.name}
+                                        </strong>
+                                        <small>
+                                          Reseller {product.resellerPrice} · Umum {product.publicPrice}
+                                        </small>
+                                      </li>
+                                    ))
                                   : null}
                               </ul>
                             ) : null}

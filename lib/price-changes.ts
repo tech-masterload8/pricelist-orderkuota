@@ -2,14 +2,20 @@ import type { Catalog, Product, ProductWatch } from "./types";
 
 const MESSAGE_LIMIT = 3500;
 
-const OPERATOR_ORDER = ["XL", "Axis", "Smart", "Isat", "Tri", "Tsel", "Game & Digital"] as const;
+export const OPERATOR_ORDER = ["XL", "Axis", "Smart", "Isat", "Tri", "Tsel", "Game & Digital"] as const;
 
 type Change = {
   providerName: string;
   code: string;
+  name: string;
+  previous: number;
+  current: number;
   delta: number;
   price: string;
+  kind: "new" | "up" | "down";
 };
+
+export type PriceChange = Change & { operator: (typeof OPERATOR_ORDER)[number] };
 
 function parsePrice(value: string) {
   const normalized = value.replace(/\./g, "").replace(",", ".").replace(/[^\d.-]/g, "");
@@ -58,17 +64,20 @@ function formatDelta(amount: number) {
 }
 
 function productLine(change: Change) {
+  if (change.kind === "new") {
+    return `‼️ <b>${escapeHtml(change.code)}</b> · ${escapeHtml(change.name)} · Rp ${escapeHtml(change.price)}`;
+  }
   const arrow = change.delta > 0 ? "⬆️" : "⬇️";
   return `${arrow} ${escapeHtml(change.code)} / ${formatDelta(change.delta)} » Rp ${escapeHtml(change.price)}`;
 }
 
-export function describePriceChanges(
+export function collectPriceChanges(
   previous: Catalog | null,
   incoming: Catalog,
   watch?: ProductWatch,
   masterCodes?: ReadonlyMap<number, string>,
-) {
-  const grouped = new Map<string, { up: Change[]; down: Change[] }>();
+): PriceChange[] {
+  const changes: PriceChange[] = [];
 
   for (const category of incoming.categories) {
     const priorCategory = previous?.categories.find((item) => item.code === category.code);
@@ -80,43 +89,89 @@ export function describePriceChanges(
       if (!bucket) continue;
       const priorProvider = priorCategory?.providers.find((item) => item.code === provider.code);
       const priorProducts = new Map((priorProvider?.products ?? []).map((product) => [product.id, product]));
+      const priorByCode = new Map((priorProvider?.products ?? []).map((product) => [product.code.trim(), product]));
       const include = (productId: number) => !rule || rule === "all" || rule.has(productId);
 
       for (const product of provider.products) {
         if (!include(product.id)) continue;
-        const change = resellerChange(product, priorProducts.get(product.id), provider.name, masterCodes?.get(product.id));
+        const prior = priorProducts.get(product.id) ?? priorByCode.get(product.code.trim());
+        const change = resellerChange(product, prior, provider.name, masterCodes?.get(product.id), Boolean(previous));
         if (!change) continue;
-        const entry = grouped.get(bucket) ?? { up: [], down: [] };
-        if (change.delta > 0) entry.up.push(change);
-        else entry.down.push(change);
-        grouped.set(bucket, entry);
+        changes.push({ ...change, operator: bucket });
       }
     }
   }
 
+  return changes;
+}
+
+export function messagesForChanges(changes: PriceChange[], now = new Date()) {
+  const grouped = new Map<string, { added: PriceChange[]; up: PriceChange[]; down: PriceChange[] }>();
+  for (const change of changes) {
+    const entry = grouped.get(change.operator) ?? { added: [], up: [], down: [] };
+    if (change.kind === "new") entry.added.push(change);
+    else if (change.delta > 0) entry.up.push(change);
+    else entry.down.push(change);
+    grouped.set(change.operator, entry);
+  }
+
+  const checkedAt = formatJakarta(now);
   return OPERATOR_ORDER.flatMap((operator) => {
     const entry = grouped.get(operator);
-    if (!entry || (entry.up.length === 0 && entry.down.length === 0)) return [];
-    return renderOperator(operator, entry.up, entry.down);
+    if (!entry || (entry.added.length === 0 && entry.up.length === 0 && entry.down.length === 0)) return [];
+    return renderOperator(operator, entry.added, entry.up, entry.down, checkedAt);
   });
 }
 
-function resellerChange(product: Product, previous: Product | undefined, providerName: string, masterCode?: string): Change | null {
-  if (!previous) return null;
-  const oldAmount = parsePrice(previous.resellerPrice);
-  const newAmount = parsePrice(product.resellerPrice);
-  if (oldAmount === null || newAmount === null || oldAmount === newAmount) return null;
+export function describePriceChanges(
+  previous: Catalog | null,
+  incoming: Catalog,
+  watch?: ProductWatch,
+  masterCodes?: ReadonlyMap<number, string>,
+) {
+  return messagesForChanges(collectPriceChanges(previous, incoming, watch, masterCodes));
+}
+
+function resellerChange(
+  product: Product,
+  previous: Product | undefined,
+  providerName: string,
+  masterCode: string | undefined,
+  catalogExists: boolean,
+): Change | null {
   const code = masterCode?.trim() || product.code;
+  const newAmount = parsePrice(product.resellerPrice);
+  if (!previous) {
+    if (!catalogExists || newAmount === null) return null;
+    return {
+      providerName,
+      code,
+      name: product.name,
+      previous: 0,
+      current: newAmount,
+      delta: 0,
+      price: product.resellerPrice,
+      kind: "new",
+    };
+  }
+  const oldAmount = parsePrice(previous.resellerPrice);
+  if (oldAmount === null || newAmount === null || oldAmount === newAmount) return null;
   return {
     providerName,
     code,
+    name: product.name,
+    previous: oldAmount,
+    current: newAmount,
     delta: newAmount - oldAmount,
     price: product.resellerPrice,
+    kind: newAmount > oldAmount ? "up" : "down",
   };
 }
 
-function renderOperator(operator: string, up: Change[], down: Change[]) {
+function renderOperator(operator: string, added: Change[], up: Change[], down: Change[], checkedAt: string) {
   const parts = [
+    ...sectionParts("‼️ <b>KODE PRODUK BARU</b> ‼️", added),
+    ...(added.length > 0 && (up.length > 0 || down.length > 0) ? ["────────────"] : []),
     ...sectionParts("⬆️ <b>HARGA NAIK</b> ⬆️", up),
     ...(up.length > 0 && down.length > 0 ? ["────────────"] : []),
     ...sectionParts("⬇️ <b>HARGA TURUN</b> ⬇️", down),
@@ -126,11 +181,11 @@ function renderOperator(operator: string, up: Change[], down: Change[]) {
   let page = 0;
 
   for (const part of parts) {
-    const next = body ? `${body}\n\n${part}` : `${title(operator, page)}\n\n${part}`;
+    const next = body ? `${body}\n\n${part}` : `${title(operator, page, checkedAt)}\n\n${part}`;
     if (next.length > MESSAGE_LIMIT && body) {
       messages.push(body);
       page += 1;
-      body = `${title(operator, page)}\n\n${part}`;
+      body = `${title(operator, page, checkedAt)}\n\n${part}`;
       continue;
     }
     body = next;
@@ -140,9 +195,18 @@ function renderOperator(operator: string, up: Change[], down: Change[]) {
   return messages;
 }
 
-function title(operator: string, page: number) {
+function formatJakarta(date: Date) {
+  const formatted = new Intl.DateTimeFormat("id-ID", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Jakarta",
+  }).format(date);
+  return `${formatted} WIB`;
+}
+
+function title(operator: string, page: number, checkedAt: string) {
   const suffix = page > 0 ? " (lanjutan)" : "";
-  return `<b>Daftar Perubahan Harga Produk ${escapeHtml(operator)}${suffix}:</b>`;
+  return `<b>Daftar Perubahan Harga Produk ${escapeHtml(operator)}${suffix}:</b>\n${checkedAt}`;
 }
 
 function sectionParts(headingHtml: string, changes: Change[]) {

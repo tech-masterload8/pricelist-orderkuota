@@ -389,35 +389,20 @@ function parseAutoSelection(text: string): AutoSelection {
 
 export function countSelectedProducts(catalog: Catalog, selection: AutoSelection) {
   const full = new Set(selection.providers);
-  const known = new Set<string>();
+  for (const product of selection.products) full.add(product.providerCode);
   let count = 0;
   for (const category of catalog.categories) {
     for (const provider of category.providers) {
-      known.add(provider.code);
       if (full.has(provider.code)) count += provider.products.length;
     }
-  }
-  const seen = new Set<string>();
-  for (const product of selection.products) {
-    if (!known.has(product.providerCode)) continue;
-    const key = `${product.providerCode}:${product.productId}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    count += 1;
   }
   return count;
 }
 
 export function toProductWatch(selection: AutoSelection): ProductWatch {
-  const watch = new Map<string, "all" | Set<number>>();
+  const watch = new Map<string, "all">();
   for (const code of selection.providers) watch.set(code, "all");
-  for (const product of selection.products) {
-    const current = watch.get(product.providerCode);
-    if (current === "all") continue;
-    const ids = current ?? new Set<number>();
-    ids.add(product.productId);
-    watch.set(product.providerCode, ids);
-  }
+  for (const product of selection.products) watch.set(product.providerCode, "all");
   return watch;
 }
 
