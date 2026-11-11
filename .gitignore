@@ -10,6 +10,10 @@ data/auto-selection.json
 data/product-codes.json
 data/product-codes-lock.json
 .vercel-login
+updater/config.json
+updater/browser-profile/
+updater/sync.log
+updater/*.exe
 *.log
 .env*
 tsconfig.tsbuildinfo

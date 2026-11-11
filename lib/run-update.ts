@@ -3,12 +3,14 @@ import {
   canPersistCatalog,
   limitReportDetails,
   mergeCatalog,
+  readAutoSelection,
   readCatalog,
   releaseUpdateLock,
   saveCatalog,
+  toProductWatch,
   writeUpdateReport,
 } from "./catalog-store";
-import { fetchFullCatalog, PriceFetchError } from "./fetch-prices";
+import { catalogFromBrowser, fetchFullCatalog, PriceFetchError, type BrowserProviderPayload } from "./fetch-prices";
 import type { Catalog, FetchProgress, ProductWatch, UpdateReport } from "./types";
 
 const PROVIDER_CODE = /^prv_[a-z0-9]+$/i;
@@ -105,6 +107,90 @@ export async function runPriceUpdate(input: {
     };
     try {
       await writeUpdateReport(report);
+    } catch (persistError) {
+      console.error("Gagal menyimpan laporan pembaruan.", persistError);
+    }
+    throw error;
+  } finally {
+    await releaseUpdateLock();
+  }
+}
+
+export async function publishBrowserUpdate(rows: BrowserProviderPayload[]): Promise<PriceUpdateResult> {
+  if (!canPersistCatalog()) {
+    throw new Error("Penyimpanan belum terhubung, jadi pembaruan tidak dijalankan.");
+  }
+
+  const lock = await acquireUpdateLock();
+  if (!lock.ok) throw new Error(lock.message);
+
+  try {
+    await writeUpdateReport({
+      state: "running",
+      at: new Date().toISOString(),
+      message: "Pembaruan dari browser sedang berjalan.",
+      details: [],
+    });
+
+    const previous = await readCatalog();
+    const watch = toProductWatch(await readAutoSelection());
+    if (watch.size === 0) {
+      throw new Error("Tidak ada produk yang dipilih untuk auto update.");
+    }
+
+    const built = catalogFromBrowser(previous, rows);
+    const categories = built.catalog.categories.map((category) => ({
+      ...category,
+      providers: category.providers.filter((provider) => watch.has(provider.code)),
+    })).filter((category) => category.providers.length > 0);
+    const matched = categories.reduce((sum, category) => sum + category.providers.length, 0);
+    const failedProviders = categories.reduce(
+      (sum, category) => sum + category.providers.filter((provider) => provider.error).length,
+      0,
+    );
+    const missing = [...watch.keys()].filter((code) => !built.matchedCodes.has(code));
+    const failureDetails = limitReportDetails([
+      ...built.skipped,
+      ...missing.map((code) => `${code}: tidak ada di hasil browser`),
+    ]);
+    const failed = failedProviders + missing.length;
+    if (matched === 0 || failed / watch.size > 0.15) {
+      throw new PriceFetchError(
+        `${failed} dari ${watch.size} operator gagal dibaca dari browser, jadi katalog lama tidak diganti.`,
+        failureDetails,
+      );
+    }
+
+    const incoming: Catalog = {
+      ...built.catalog,
+      providerCount: matched,
+      failedProviders,
+      categories,
+    };
+    const catalog = mergeCatalog(previous, incoming, { mergeProviders: true, watch });
+    await saveCatalog(catalog);
+    if (failureDetails.length > 0) {
+      await writeUpdateReport({
+        state: "warning",
+        at: catalog.fetchedAt,
+        message: `${failedProviders + missing.length} operator gagal dibaca dari browser. Harga operator itu tidak diganti.`,
+        details: failureDetails,
+      });
+    } else {
+      await writeUpdateReport(null);
+    }
+
+    return { catalog, previous, incoming, failureDetails };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Pembaruan harga gagal.";
+    const details = limitReportDetails(error instanceof PriceFetchError ? error.details : []);
+    try {
+      await writeUpdateReport({
+        state: "error",
+        at: new Date().toISOString(),
+        message,
+        details,
+      });
     } catch (persistError) {
       console.error("Gagal menyimpan laporan pembaruan.", persistError);
     }

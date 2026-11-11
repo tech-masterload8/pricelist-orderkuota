@@ -279,6 +279,87 @@ async function fetchProviderRows(path: string): Promise<ParsedProduct[]> {
   return products;
 }
 
+export type BrowserProviderPayload = {
+  categoryName: string;
+  providerName: string;
+  products: ParsedProduct[];
+  error?: string | null;
+};
+
+export function catalogFromBrowser(previous: Catalog, rows: BrowserProviderPayload[]) {
+  const identity = identityFrom(previous);
+  const skipped: string[] = [];
+  const groups = new Map<string, { code: string; name: string; providers: Catalog["categories"][number]["providers"] }>();
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    const category = identity.categories.get(normalizeName(row.categoryName));
+    const label = `${row.categoryName} / ${row.providerName}`;
+    if (!category) {
+      skipped.push(`${label}: kategori tidak dikenal`);
+      continue;
+    }
+    const matched = identity.providers.get(`${category.code}\n${normalizeName(row.providerName)}`);
+    if (!matched) {
+      skipped.push(`${label}: operator tidak dikenal`);
+      continue;
+    }
+    if (seen.has(matched.code)) continue;
+    seen.add(matched.code);
+
+    const errorText = row.error?.trim() || "";
+    const products = errorText ? [] : assignProductIds(dedupeParsed(row.products), matched.code, identity);
+    const error = errorText || (products.length === 0 ? "Tabel harga kosong." : null);
+    const group = groups.get(category.code) ?? { code: category.code, name: category.name, providers: [] };
+    group.providers.push({
+      code: matched.code,
+      name: matched.name,
+      error,
+      products: error ? [] : products,
+    });
+    groups.set(category.code, group);
+  }
+
+  const categories = [...groups.values()];
+  const failedProviders = categories.reduce(
+    (sum, category) => sum + category.providers.filter((provider) => provider.error).length,
+    0,
+  );
+  const productCount = categories.reduce(
+    (sum, category) => sum + category.providers.reduce((inner, provider) => inner + provider.products.length, 0),
+    0,
+  );
+
+  return {
+    catalog: {
+      fetchedAt: new Date().toISOString(),
+      productCount,
+      providerCount: seen.size,
+      failedProviders,
+      categories,
+    } satisfies Catalog,
+    skipped,
+    matchedCodes: seen,
+  };
+}
+
+function dedupeParsed(rows: ParsedProduct[]) {
+  const products: ParsedProduct[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const code = row.code.trim();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    products.push({
+      code,
+      name: row.name.trim(),
+      resellerPrice: row.resellerPrice.trim(),
+      publicPrice: row.publicPrice.trim(),
+    });
+  }
+  return products;
+}
+
 function assignProductIds(rows: ParsedProduct[], providerCode: string, identity: Identity): Product[] {
   return rows.map((row) => {
     const key = `${providerCode}\n${row.code}`;
