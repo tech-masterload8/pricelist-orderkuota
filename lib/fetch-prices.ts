@@ -164,7 +164,7 @@ async function getHtml(path: string, attempt = 0): Promise<string> {
       signal: AbortSignal.timeout(25_000),
     });
     const html = await response.text();
-    if (isChallenge(html)) {
+    if (isChallenge(html) || response.status === 403) {
       throw new Error(`Orderkuota menolak permintaan otomatis pada ${path}. Katalog lama tetap dipakai.`);
     }
     if (!response.ok) {
