@@ -2,5 +2,6 @@
   "_comment": "Salin file ini menjadi config.json di folder yang sama dengan PricelistBrowserSync.exe. Isi token dengan CRON_SECRET proyek Vercel. Jangan kirim config.json ke orang lain.",
   "uploadUrl": "https://pricelist-orderkuota.vercel.app/api/browser-sync",
   "token": "",
-  "intervalMinutes": 10
+  "intervalMinutes": 10,
+  "pageDelaySeconds": 5
 }

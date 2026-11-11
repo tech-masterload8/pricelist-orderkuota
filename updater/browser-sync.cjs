@@ -33,12 +33,14 @@ function loadConfig() {
   const uploadUrl = String(value.uploadUrl || "").trim();
   const token = String(value.token || "").trim();
   const intervalMinutes = Number(value.intervalMinutes);
+  const pageDelaySeconds = Number(value.pageDelaySeconds);
   if (!uploadUrl.startsWith("https://")) throw new Error("uploadUrl di config.json harus alamat https.");
   if (!token) throw new Error("token di config.json masih kosong. Isi dengan CRON_SECRET proyek Vercel.");
   return {
     uploadUrl,
     token,
     intervalMs: Math.min(180, Math.max(5, Number.isFinite(intervalMinutes) ? intervalMinutes : 10)) * 60 * 1000,
+    pageDelayMs: Math.min(30, Math.max(3, Number.isFinite(pageDelaySeconds) ? pageDelaySeconds : 5)) * 1000,
   };
 }
 
@@ -208,20 +210,46 @@ function openSession(websocketUrl) {
   };
 }
 
-async function pageHtml(session) {
+function isRateLimited(html) {
+  const text = String(html).slice(0, 12000).toLowerCase();
+  return text.includes("akses dibatasi") || text.includes("terlalu banyak permintaan");
+}
+
+async function pageSnapshot(session) {
   const result = await session.send("Runtime.evaluate", {
-    expression: "document.documentElement ? document.documentElement.outerHTML : ''",
+    expression: "JSON.stringify({ href: location.href, html: document.documentElement ? document.documentElement.outerHTML : '' })",
     returnByValue: true,
   });
-  return typeof result.result?.value === "string" ? result.result.value : "";
+  try {
+    const value = JSON.parse(result.result?.value || "{}");
+    return { href: String(value.href || ""), html: String(value.html || "") };
+  } catch {
+    return { href: "", html: "" };
+  }
+}
+
+function onRequestedPage(href, pagePath, pageNumber) {
+  try {
+    const url = new URL(href);
+    const query = url.searchParams.get("page");
+    const pageMatches = pageNumber === 1 ? !query || query === "1" : query === String(pageNumber);
+    return url.pathname === pagePath && pageMatches;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForHtml(session, ready, timeoutMs, waitingNote) {
   const started = Date.now();
   let noted = false;
   while (Date.now() - started < timeoutMs) {
-    const html = await pageHtml(session);
-    if (ready(html)) return html;
+    const snap = await pageSnapshot(session);
+    if (isRateLimited(snap.html)) {
+      log("Orderkuota membatasi akses (429). Menunggu 30 detik.");
+      await sleep(30_000);
+      continue;
+    }
+    if (ready(snap.html)) return snap.html;
     if (!noted && waitingNote) {
       log(waitingNote);
       noted = true;
@@ -231,16 +259,41 @@ async function waitForHtml(session, ready, timeoutMs, waitingNote) {
   return "";
 }
 
-async function readOperator(session, pageUrl, pagePath) {
+async function loadPricePage(session, target, pagePath, pageNumber, delayMs) {
+  await sleep(delayMs);
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    await session.send("Page.navigate", { url: target });
+    const started = Date.now();
+    let limited = false;
+    while (Date.now() - started < 40_000) {
+      const snap = await pageSnapshot(session);
+      if (!onRequestedPage(snap.href, pagePath, pageNumber)) {
+        await sleep(400);
+        continue;
+      }
+      if (isRateLimited(snap.html)) {
+        limited = true;
+        break;
+      }
+      if (snap.html.includes("table-bordered")) return snap.html;
+      await sleep(400);
+    }
+    if (!limited) break;
+    const wait = 20_000 * attempt;
+    log(`Orderkuota membatasi akses (429). Menunggu ${Math.round(wait / 1000)} detik, lalu membuka halaman yang sama lagi.`);
+    await sleep(wait);
+  }
+  throw new Error(`Tabel harga tidak terbuka pada ${pagePath}`);
+}
+
+async function readOperator(session, pageUrl, pagePath, delayMs) {
   const products = [];
   const seen = new Set();
   let page = 1;
   let pages = 1;
   while (page <= pages) {
     const target = page === 1 ? pageUrl : `${pageUrl}?page=${page}`;
-    await session.send("Page.navigate", { url: target });
-    const html = await waitForHtml(session, (value) => value.includes("table-bordered"), 90_000, "");
-    if (!html) throw new Error(`Tabel harga tidak terbuka pada ${pagePath}`);
+    const html = await loadPricePage(session, target, pagePath, page, delayMs);
     if (page === 1) pages = lastPage(html, pagePath);
     for (const product of parseProducts(html)) {
       if (seen.has(product.code)) continue;
@@ -311,7 +364,7 @@ async function syncOnce(config, session) {
       continue;
     }
     try {
-      const products = await readOperator(session, `https://orderkuota.com${pagePath}`, pagePath);
+      const products = await readOperator(session, `https://orderkuota.com${pagePath}`, pagePath, config.pageDelayMs);
       providers.push({ categoryName, providerName, products });
       log(`${providers.length}/${targets.length} ${providerName}: ${products.length} produk`);
     } catch (error) {
@@ -337,7 +390,7 @@ function stopBrowser(child) {
 
 async function main() {
   const config = loadConfig();
-  log(`Pembaruan browser tiap ${Math.round(config.intervalMs / 60000)} menit.`);
+  log(`Pembaruan browser tiap ${Math.round(config.intervalMs / 60000)} menit. Jeda antar halaman ${Math.round(config.pageDelayMs / 1000)} detik.`);
   const browser = await connectBrowser();
   const session = openSession(browser.websocketUrl);
   await session.ready;
